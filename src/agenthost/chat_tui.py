@@ -17,6 +17,8 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.message import Message
 from textual.reactive import reactive
+from rich.markdown import Markdown as RichMarkdown
+from rich.text import Text
 from textual.widgets import (
     Button,
     Collapsible,
@@ -24,7 +26,6 @@ from textual.widgets import (
     Label,
     ListItem,
     ListView,
-    Markdown,
     Static,
     TextArea,
 )
@@ -184,7 +185,13 @@ class AssistantMessage(Vertical):
     DEFAULT_CSS = """
     AssistantMessage {
         width: 100%;
+        height: auto;
+        min-height: 1;
         padding: 0 2 1 2;
+    }
+    AssistantMessage Static {
+        width: 100%;
+        height: auto;
     }
     """
 
@@ -194,14 +201,19 @@ class AssistantMessage(Vertical):
         super().__init__(**kwargs)
 
     def compose(self) -> ComposeResult:
-        yield Markdown(self.content)
+        yield Static("", markup=False)
 
     def watch_content(self, content: str) -> None:
         try:
-            markdown = self.query_one(Markdown)
+            static = self.query_one(Static)
         except NoMatches:
             return
-        markdown.update(content)
+        try:
+            renderable: Any = RichMarkdown(content)
+        except Exception:  # noqa: BLE001
+            renderable = Text(content)
+        static.update(renderable)
+        self.refresh(layout=True)
 
 
 class ToolCallCard(Collapsible):
@@ -711,35 +723,40 @@ class ChatApp(App):
         header = self.query_one("#header", Static)
         header.update(f"agenthost chat — {agent_name} — thread: {thread_id}")
 
-    def _handle_message_event(self, event: dict[str, Any]) -> None:
+    async def _handle_message_event(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
         event_data = event.get("data")
 
         if event_type == "content":
-            if self._current_assistant is not None:
-                self._current_assistant.content += event_data
-            self.call_next(self.chat_scroll.scroll_end, animate=False)
+            if self._current_assistant is None:
+                self._current_assistant = AssistantMessage()
+                await self.chat_scroll.mount(self._current_assistant)
+            self._current_assistant.content += event_data
+            self.chat_scroll.scroll_end(animate=False)
 
         elif event_type == "tool_start":
+            # Subsequent assistant content belongs in a new message bubble
+            # that appears after the tool cards.
+            self._current_assistant = None
             name = event_data.get("name", "tool")
             arguments = event_data.get("arguments", {})
             self._current_tool = ToolCallCard(name, arguments)
-            self.chat_scroll.mount(self._current_tool)
+            await self.chat_scroll.mount(self._current_tool)
             self._track_touched(name, arguments)
-            self.call_next(self.chat_scroll.scroll_end, animate=False)
+            self.chat_scroll.scroll_end(animate=False)
 
         elif event_type == "tool_result":
             name = event_data.get("name", "tool")
             result = event_data.get("result", "")
-            self.chat_scroll.mount(ToolResultCard(name, result))
-            self.call_next(self.chat_scroll.scroll_end, animate=False)
+            await self.chat_scroll.mount(ToolResultCard(name, result))
+            self.chat_scroll.scroll_end(animate=False)
 
         elif event_type == "tool_error":
             name = event_data.get("name", "tool")
             error = event_data.get("error", "")
             card = ToolResultCard(name, f"ERROR: {error}")
-            self.chat_scroll.mount(card)
-            self.call_next(self.chat_scroll.scroll_end, animate=False)
+            await self.chat_scroll.mount(card)
+            self.chat_scroll.scroll_end(animate=False)
 
     def _track_touched(self, name: str, arguments: dict[str, Any]) -> None:
         path_tools = {"read_file", "write_file", "edit_file", "delete_file"}
