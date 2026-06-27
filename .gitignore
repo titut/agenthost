@@ -25,6 +25,9 @@ agents/*/output/
 # ── Runtime registry ────────────────────────────────────────────────
 .agenthost-registry.json
 
+# ── Backup info ────────────────────────────────────────────────
+.agenthost
+
 # ── Sensitive credentials & keys ────────────────────────────────────
 keys.kdbx
 .env

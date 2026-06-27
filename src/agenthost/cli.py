@@ -1,8 +1,9 @@
-"""CLI entry point: agenthost serve | agenthost chat | agenthost list."""
+"""CLI entry point: agenthost serve | agenthost chat | agenthost list | agenthost key."""
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import sys
 from pathlib import Path
@@ -10,7 +11,14 @@ from pathlib import Path
 from agenthost.config import AgentConfig
 from agenthost.registry import list_agents
 from agenthost.server import serve
-from agenthost.secure_key import load_keepass_env
+from agenthost.secure_key import (
+    KeePassDB,
+    KeePassDBCorruptedError,
+    KeePassEntryNotFoundError,
+    KeePassNotFoundError,
+    KeePassWrongPasswordError,
+    load_keepass_env,
+)
 
 
 def _add_serve_parser(
@@ -223,9 +231,163 @@ def _do_list(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_key_parser(
+    subparsers: argparse._SubParsersAction,
+) -> argparse.ArgumentParser:
+    """Add key subcommand group: list, add, edit."""
+    parser = subparsers.add_parser("key", help="Manage API keys in KeePass database.")
+    key_sub = parser.add_subparsers(dest="key_command", required=True)
+
+    # key list
+    list_p = key_sub.add_parser("list", help="List all key names.")
+    list_p.add_argument(
+        "--db", default="keys.kdbx", help="Path to .kdbx file (default: keys.kdbx)"
+    )
+    list_p.add_argument(
+        "--password", help="Master password (will prompt securely if omitted)"
+    )
+
+    # key add
+    add_p = key_sub.add_parser("add", help="Add a new API key.")
+    add_p.add_argument(
+        "--db", default="keys.kdbx", help="Path to .kdbx file (default: keys.kdbx)"
+    )
+    add_p.add_argument(
+        "--password", help="Master password (will prompt securely if omitted)"
+    )
+    add_p.add_argument("--name", help="Key name / entry title (will prompt if omitted)")
+    add_p.add_argument(
+        "--value", help="Key value (will prompt with masked input if omitted)"
+    )
+
+    # key edit
+    edit_p = key_sub.add_parser("edit", help="Edit an existing API key.")
+    edit_p.add_argument(
+        "--db", default="keys.kdbx", help="Path to .kdbx file (default: keys.kdbx)"
+    )
+    edit_p.add_argument(
+        "--password", help="Master password (will prompt securely if omitted)"
+    )
+    edit_p.add_argument(
+        "--name", help="Key name to edit (will prompt with selection if omitted)"
+    )
+    edit_p.add_argument(
+        "--value", help="New key value (will prompt with masked input if omitted)"
+    )
+
+    return parser
+
+
+def _do_key(args: argparse.Namespace) -> int:
+    """Dispatch key subcommands to KeePassDB operations."""
+    db_path: str = args.db
+    master_password: str | None = args.password
+
+    if master_password is None:
+        master_password = getpass.getpass("Master password: ")
+
+    try:
+        if args.key_command == "list":
+            db = KeePassDB(db_path, master_password)
+            keys = db.list_keys()
+            if keys:
+                for key in keys:
+                    print(key)
+            else:
+                print("No keys found.")
+            return 0
+
+        elif args.key_command == "add":
+            # Prompt for name if omitted
+            name: str | None = args.name
+            if name is None:
+                name = input("KEY_NAME: ").strip()
+                if not name:
+                    print("\u274c Key name cannot be empty.", file=sys.stderr)
+                    return 1
+
+            # Prompt for value if omitted
+            value: str | None = args.value
+            if value is None:
+                value = getpass.getpass("KEY_VALUE: ").strip()
+                if not value:
+                    print("\u274c Key value cannot be empty.", file=sys.stderr)
+                    return 1
+
+            db_existed = Path(db_path).exists()
+            db = KeePassDB(db_path, master_password)
+            if not db_existed:
+                print(f"\u2705 Created new KeePass database at {db_path}.")
+
+            try:
+                db.add_key(name, value)
+            except ValueError as exc:
+                print(f"\u274c {exc}", file=sys.stderr)
+                return 1
+
+            print(f"\u2705 Added key '{name}' to {db_path}.")
+            return 0
+
+        elif args.key_command == "edit":
+            db = KeePassDB(db_path, master_password)
+
+            name = args.name
+            if name is None:
+                keys = db.list_keys()
+                if not keys:
+                    print("\u274c No keys to edit.", file=sys.stderr)
+                    return 1
+                print("Select a key to edit:")
+                for i, key in enumerate(keys, start=1):
+                    print(f"  {i}) {key}")
+                choice = input("Enter number or key name: ").strip()
+                if choice.isdigit():
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(keys):
+                        name = keys[idx]
+                    else:
+                        print(
+                            f"\u274c Invalid selection: {choice}",
+                            file=sys.stderr,
+                        )
+                        return 1
+                elif choice:
+                    name = choice
+                else:
+                    print("\u274c No key selected.", file=sys.stderr)
+                    return 1
+
+            value = args.value
+            if value is None:
+                value = getpass.getpass("New value: ").strip()
+                if not value:
+                    print("\u274c Key value cannot be empty.", file=sys.stderr)
+                    return 1
+
+            db.update_key(name, value)
+            print(f"\u2705 Updated key '{name}' in {db_path}.")
+            return 0
+
+    except KeePassNotFoundError as exc:
+        print(f"\u274c {exc}", file=sys.stderr)
+        return 1
+    except KeePassWrongPasswordError:
+        print(
+            "\u274c Invalid master password for KeePass database.",
+            file=sys.stderr,
+        )
+        return 1
+    except KeePassEntryNotFoundError as exc:
+        print(f"\u274c {exc}", file=sys.stderr)
+        return 1
+    except KeePassDBCorruptedError as exc:
+        print(f"\u274c {exc}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    # MUST KEEP FOR API KEY TO LOAD FROM ENVIRONMENT VARIABLES
-    load_keepass_env("keys.kdbx", "OPENAI_API_KEY", "c1bc0bgq")
     parser = argparse.ArgumentParser(
         prog="agenthost",
         description="Host and chat with folder-based agents.",
@@ -235,8 +397,15 @@ def main(argv: list[str] | None = None) -> int:
     _add_serve_parser(subparsers)
     _add_chat_parser(subparsers)
     _add_list_parser(subparsers)
+    _add_key_parser(subparsers)
 
     args = parser.parse_args(argv)
+
+    if args.command == "key":
+        return _do_key(args)
+
+    # MUST KEEP FOR API KEY TO LOAD FROM ENVIRONMENT VARIABLES
+    load_keepass_env("keys.kdbx", "OPENAI_API_KEY", "c1bc0bgq")
 
     if args.command == "serve":
         return _do_serve(args)
