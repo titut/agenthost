@@ -1,0 +1,6 @@
+name: SW_DEV
+model: deepseek-v4-flash
+host: 127.0.0.1
+temperature: 0.4
+max_memory_turns: 50
+base_url: https://api.deepseek.com

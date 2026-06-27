@@ -1,0 +1,61 @@
+# ── Python ──────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# ── Virtual environments ────────────────────────────────────────────
+.venv/
+venv/
+env/
+.env/
+
+# ── Auto-generated agent memory (created at runtime) ─────────────────
+agents/*/memory/
+
+# ── Agent-generated output (architecture, test plans, etc.) ──────────
+agents/*/output/
+
+# ── Runtime registry ────────────────────────────────────────────────
+.agenthost-registry.json
+
+# ── Sensitive credentials & keys ────────────────────────────────────
+keys.kdbx
+.env
+.env.local
+*.key
+*.pem
+*.cert
+
+# ── IDE / Editor ────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+
+# ── OS junk ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Tool caches ─────────────────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.mypy/
+
+# ── Build output (wheel tarballs, etc.) ─────────────────────────────
+*.whl
+*.tar.gz
+
+# ── Logs / runtime ──────────────────────────────────────────────────
+*.log
+*.pid
