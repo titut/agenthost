@@ -83,7 +83,16 @@ Ports are auto-assigned starting at `8000`. The CLI prints the URL on startup.
 agenthost chat --agent RESEARCHER
 ```
 
-This starts an interactive streaming REPL. Type messages, see streamed responses, and continue the thread until you run `/quit`.
+This opens a full-screen TUI chat client with:
+
+- **Markdown rendering** for assistant responses and syntax highlighting for code blocks
+- **Streaming tool cards** — tool calls and results appear as collapsible cards instead of raw JSON
+- **Multi-line input** — press `Enter` to send; `Shift+Enter` inserts a newline when your terminal supports it
+- **Message history** — `↑` / `↓` recall previous messages
+- **Context attachments** — type `@path/to/file` or `@path/to/dir/` to attach files or directories to your prompt; the right-hand panel tracks attached context and files the agent has touched
+- **Thread continuity** — the current thread ID is shown in the header and persisted across turns
+
+Use `--no-tui` to fall back to the simple text REPL, or `--once` for single-shot non-interactive output.
 
 Or with curl:
 
@@ -132,8 +141,11 @@ Options:
 | `--url`       | Full chat endpoint URL; overrides `--host`/`--port`       |
 | `--thread`    | Continue an existing conversation thread                  |
 | `--once`      | Send a single message and exit (requires `--message`)     |
+| `--no-tui`    | Use the simple text REPL instead of the full-screen TUI   |
 
-The CLI streams content, tool calls, and tool results in real time. REPL commands:
+The CLI streams content, tool calls, and tool results in real time. In the simple REPL, commands are:
+
+In the TUI, use `Ctrl+Q` to quit and `Ctrl+C` to interrupt streaming.
 
 - `/quit`, `/exit`, `/q` — End the session
 - `/help` — Show available commands
@@ -461,6 +473,7 @@ Running agents are tracked in `.agenthost-registry.json` at the project root:
 src/agenthost/
 ├── __init__.py      # Package metadata (__version__ = "0.1.0")
 ├── __main__.py      # `python -m agenthost` entry point
+├── chat_tui.py      # Textual TUI for agenthost chat
 ├── cli.py           # CLI: serve, chat, list, key subcommands
 ├── config.py        # AgentConfig: loads agent.yaml, builds system prompt
 ├── agent.py         # Agent class: LLM loop, tool invocation, memory integration
@@ -502,3 +515,4 @@ From `pyproject.toml`:
 | `httpx`     | 0.27.0          | HTTP client (chat streaming)        |
 | `ddgs`      | 9.0             | DuckDuckGo search (no API key)      |
 | `pykeepass` | 4.1.0           | KeePass .kdbx file access           |
+| `textual`   | 0.52.0          | TUI framework for `agenthost chat`  |

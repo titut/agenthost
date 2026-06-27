@@ -24,6 +24,12 @@ from agenthost.secure_key import (
 )
 
 
+try:
+    from agenthost.chat_tui import ChatApp
+except Exception:  # noqa: BLE001
+    ChatApp = None  # type: ignore[misc, assignment]
+
+
 logger = setup_logging("agenthost.cli")
 
 
@@ -67,6 +73,12 @@ def _add_chat_parser(subparsers: argparse._SubParsersAction) -> argparse.Argumen
         action="store_true",
         help="Send a single message and exit. Ignored if no message is given.",
     )
+    parser.add_argument(
+        "--no-tui",
+        dest="no_tui",
+        action="store_true",
+        help="Use the simple text chat loop instead of the TUI.",
+    )
     return parser
 
 
@@ -107,6 +119,19 @@ def _resolve_chat_url(args: argparse.Namespace) -> str:
         )
 
     raise ValueError("Must provide --port, --url, or --agent.")
+
+
+def _fetch_agent_name(url: str) -> str:
+    """Best-effort lookup of the agent name from the server's /health endpoint."""
+    try:
+        import httpx
+
+        health_url = url.replace("/chat", "/health")
+        response = httpx.get(health_url, timeout=5.0)
+        response.raise_for_status()
+        return response.json().get("agent", "agent")
+    except Exception:  # noqa: BLE001
+        return "agent"
 
 
 def _stream_turn(
@@ -189,54 +214,67 @@ def _do_chat(args: argparse.Namespace) -> int:
 
     thread_id: str | None = args.thread
 
-    if args.message and args.once:
-        _, code = _stream_turn(url, args.message, thread_id)
-        return code
+    use_tui = (
+        not args.no_tui
+        and not args.once
+        and sys.stdin.isatty()
+        and ChatApp is not None
+    )
 
-    print("Starting chat. Type /help for commands, /quit to exit.")
-
-    if args.message:
-        new_thread, code = _stream_turn(url, args.message, thread_id)
-        if code != 0:
+    if not use_tui:
+        if args.message and args.once:
+            _, code = _stream_turn(url, args.message, thread_id)
             return code
-        thread_id = new_thread
 
-    while True:
-        try:
-            user_input = input("\n> ")
-        except EOFError:
-            print()
-            break
-        except KeyboardInterrupt:
-            print()
-            break
+        print("Starting chat. Type /help for commands, /quit to exit.")
 
-        user_input = user_input.strip()
-        if not user_input:
-            continue
+        if args.message:
+            new_thread, code = _stream_turn(url, args.message, thread_id)
+            if code != 0:
+                return code
+            thread_id = new_thread
 
-        if user_input in ("/quit", "/exit", "/q"):
-            break
+        while True:
+            try:
+                user_input = input("\n> ")
+            except EOFError:
+                print()
+                break
+            except KeyboardInterrupt:
+                print()
+                break
 
-        if user_input == "/help":
-            print(
-                "Commands:\n"
-                "  /help      Show this help\n"
-                "  /quit      Exit the chat\n"
-                "  /thread    Show the current thread ID"
-            )
-            continue
+            user_input = user_input.strip()
+            if not user_input:
+                continue
 
-        if user_input == "/thread":
-            print(f"Current thread: {thread_id or '<none>'}")
-            continue
+            if user_input in ("/quit", "/exit", "/q"):
+                break
 
-        new_thread, code = _stream_turn(url, user_input, thread_id)
-        if code != 0:
-            return code
-        thread_id = new_thread
+            if user_input == "/help":
+                print(
+                    "Commands:\n"
+                    "  /help      Show this help\n"
+                    "  /quit      Exit the chat\n"
+                    "  /thread    Show the current thread ID"
+                )
+                continue
 
-    print("Goodbye.")
+            if user_input == "/thread":
+                print(f"Current thread: {thread_id or '<none>'}")
+                continue
+
+            new_thread, code = _stream_turn(url, user_input, thread_id)
+            if code != 0:
+                return code
+            thread_id = new_thread
+
+        print("Goodbye.")
+        return 0
+
+    agent_name = _fetch_agent_name(url)
+    app = ChatApp(url=url, agent_name=agent_name, thread_id=thread_id)
+    app.run()
     return 0
 
 
