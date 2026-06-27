@@ -5,14 +5,14 @@ import json
 from pathlib import Path
 
 
-# Agent output workspace. All markdown files are written under this directory.
-_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
+# Operations are scoped to the directory from which agenthost was invoked.
+_OUTPUT_DIR = Path.cwd()
 
 
 def write_markdown(path: str, content: str) -> dict:
-    """Write a markdown file inside the SYS_ENG output directory.
+    """Write a markdown file inside the current working directory.
 
-    The given path is sanitized so it cannot escape the output directory.
+    The given path is sanitized so it cannot escape the current directory.
     Parent directories are created automatically. Existing files are overwritten.
 
     Args:
@@ -53,6 +53,6 @@ def write_markdown(path: str, content: str) -> dict:
 
     return {
         "status": "written",
-        "path": str(target.relative_to(_OUTPUT_DIR.parent)),
+        "path": str(target.relative_to(_OUTPUT_DIR)),
         "bytes": target.stat().st_size,
     }

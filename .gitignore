@@ -24,6 +24,7 @@ agents/*/output/
 
 # ── Runtime registry ────────────────────────────────────────────────
 .agenthost-registry.json
+agents.yaml
 
 # ── Backup info ────────────────────────────────────────────────
 .agenthost

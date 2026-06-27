@@ -1,9 +1,9 @@
 """Process registry for tracking active agenthost agents.
 
-The registry is a small JSON file stored at the repository root. Each running
-agent registers itself on startup and removes itself on shutdown. Because the
-registry can be left stale if a process crashes, `list_agents()` filters out
-entries whose PID is no longer alive.
+The registry is a small JSON file stored in the fixed agenthost home directory.
+Each running agent registers itself on startup and removes itself on shutdown.
+Because the registry can be left stale if a process crashes, `list_agents()`
+filters out entries whose PID is no longer alive.
 """
 from __future__ import annotations
 
@@ -15,9 +15,10 @@ from pathlib import Path
 from typing import Any
 
 
-# Repo root is two levels above this file: src/agenthost/registry.py
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_REGISTRY_FILE = _REPO_ROOT / ".agenthost-registry.json"
+from agenthost.home import get_registry_path
+
+
+_REGISTRY_FILE = get_registry_path()
 
 
 @dataclass

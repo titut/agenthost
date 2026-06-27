@@ -15,17 +15,11 @@ from pathlib import Path
 
 import httpx
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_AGENTS_DIR = _REPO_ROOT / "agents"
 _MAX_AGENTS = 3
 _HEALTH_TIMEOUT = 15  # seconds to wait for agent to become healthy
 _DESPAWN_GRACE = 5    # seconds to wait after SIGTERM before SIGKILL
 
-# Registry loaded from ORCHESTRATOR's own SQLite KV store at module level.
-# This is a simple pattern — the tools can read/write the ORCHESTRATOR's memory.
-# In practice, the Agent class injects memory access, but for tool-level simplicity
-# we use the KV store path directly.
-_ORCHESTRATOR_MEMORY_DIR = _REPO_ROOT / "agents" / "ORCHESTRATOR" / "memory"
+# Key used to store spawned-agent records in the ORCHESTRATOR's own KV store.
 _REGISTRY_KEY = "agent_registry"
 
 # Keep handles to spawned child processes so we can reap them and avoid zombies.
@@ -46,12 +40,22 @@ def _track_process(proc: subprocess.Popen) -> None:
     threading.Thread(target=_reap_process, args=(proc,), daemon=True).start()
 
 
+def _get_orchestrator_path() -> Path:
+    """Resolve ORCHESTRATOR's own folder path from `agenthost agent list`."""
+    agents = _run_agenthost_agent_list()
+    if "ORCHESTRATOR" in agents:
+        return agents["ORCHESTRATOR"]
+    raise RuntimeError(
+        "ORCHESTRATOR is not registered. Run `agenthost agent add ORCHESTRATOR <path>`."
+    )
+
+
 def _get_registry() -> dict:
     """Read the agent registry from the ORCHESTRATOR's KV store."""
     from agenthost.memory import AgentMemory
     from agenthost.config import AgentConfig
 
-    config = AgentConfig(path=_REPO_ROOT / "agents" / "ORCHESTRATOR", name="ORCHESTRATOR")
+    config = AgentConfig(path=_get_orchestrator_path(), name="ORCHESTRATOR")
     memory = AgentMemory(config)
     # Return a deep copy so callers can mutate the dict without affecting the
     # stored snapshot until _save_registry is called.
@@ -63,7 +67,7 @@ def _save_registry(registry: dict) -> None:
     from agenthost.memory import AgentMemory
     from agenthost.config import AgentConfig
 
-    config = AgentConfig(path=_REPO_ROOT / "agents" / "ORCHESTRATOR", name="ORCHESTRATOR")
+    config = AgentConfig(path=_get_orchestrator_path(), name="ORCHESTRATOR")
     memory = AgentMemory(config)
     memory.set(_REGISTRY_KEY, registry)
 
@@ -77,7 +81,6 @@ def _run_agenthost_list() -> list[dict[str, object]]:
     try:
         result = subprocess.run(
             [sys.executable, "-m", "agenthost", "list"],
-            cwd=_REPO_ROOT,
             capture_output=True,
             text=True,
             check=False,
@@ -105,20 +108,51 @@ def _run_agenthost_list() -> list[dict[str, object]]:
     return agents
 
 
+def _run_agenthost_agent_list() -> dict[str, Path]:
+    """Run `agenthost agent list` and parse it into an alias -> path map.
+
+    Only returns entries whose path exists and contains WHOAMI.md.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "agenthost", "agent", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10.0,
+        )
+    except Exception:
+        return {}
+
+    agents: dict[str, Path] = {}
+    for line in result.stdout.strip().splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        alias = parts[0]
+        path_str = " ".join(parts[1:])
+        try:
+            path = Path(path_str).expanduser().resolve()
+        except Exception:
+            continue
+        if path.is_dir() and (path / "WHOAMI.md").exists():
+            agents[alias] = path
+    return agents
+
+
 def read_agent_folder(name: str) -> str:
-    """Read an agent folder from agents/<name> and return its capabilities.
+    """Read an agent folder registered in agents.yaml and return its capabilities.
 
     Returns the agent's persona, tools (name + description), skills,
-    model, and temperature. Only reads from the agents/ directory.
+    model, and temperature.
     """
-    agent_dir = (_AGENTS_DIR / name).resolve()
-    try:
-        agent_dir.relative_to(_AGENTS_DIR.resolve())
-    except ValueError:
-        return json.dumps({"error": f"Invalid agent name: {name}"})
+    agents = _run_agenthost_agent_list()
+    agent_dir = agents.get(name)
+    if agent_dir is None:
+        return json.dumps({"error": f"Agent not registered: {name}"})
 
     if not agent_dir.is_dir() or not (agent_dir / "WHOAMI.md").exists():
-        return json.dumps({"error": f"Agent folder not found: agents/{name}"})
+        return json.dumps({"error": f"Agent folder not found: {agent_dir}"})
 
     result = {
         "name": name,
@@ -173,7 +207,7 @@ def read_agent_folder(name: str) -> str:
 
 
 def spawn_agent(name: str) -> str:
-    """Spawn an agent from agents/<name>. Port is assigned dynamically by agenthost.
+    """Spawn a registered agent by alias. Port is assigned dynamically by agenthost.
 
     Max 3 concurrent agents. Returns an agent_id (UUID) on success.
     """
@@ -187,18 +221,17 @@ def spawn_agent(name: str) -> str:
                                for k, v in running.items()],
         })
 
-    agent_dir = (_AGENTS_DIR / name).resolve()
-    try:
-        agent_dir.relative_to(_AGENTS_DIR.resolve())
-    except ValueError:
-        return json.dumps({"error": f"Invalid agent name: {name}"})
+    agents = _run_agenthost_agent_list()
+    agent_dir = agents.get(name)
+    if agent_dir is None:
+        return json.dumps({"error": f"Agent not registered: {name}"})
 
     if not agent_dir.is_dir() or not (agent_dir / "WHOAMI.md").exists():
-        return json.dumps({"error": f"Agent folder not found: agents/{name}"})
+        return json.dumps({"error": f"Agent folder not found: {agent_dir}"})
 
     try:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "agenthost", "serve", f"agents/{name}"],
+            [sys.executable, "-m", "agenthost", "serve", name],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -461,7 +494,8 @@ def _get_memory() -> tuple:
     """Create and return (AgentMemory, AgentConfig) for the ORCHESTRATOR."""
     from agenthost.memory import AgentMemory
     from agenthost.config import AgentConfig
-    config = AgentConfig(path=_REPO_ROOT / "agents" / "ORCHESTRATOR", name="ORCHESTRATOR")
+
+    config = AgentConfig(path=_get_orchestrator_path(), name="ORCHESTRATOR")
     memory = AgentMemory(config)
     return memory, config
 
@@ -516,7 +550,7 @@ def plan_delete(key: str) -> str:
         memory.set(key, None)  # kv store uses set with None to clear
         # We need to actually delete the key. Let's use sqlite directly.
         import sqlite3
-        db_path = _ORCHESTRATOR_MEMORY_DIR / "memory.db"
+        db_path = _get_orchestrator_path() / "memory" / "memory.db"
         conn = sqlite3.connect(str(db_path))
         conn.execute("DELETE FROM kv WHERE key = ?", (key,))
         conn.commit()
@@ -527,24 +561,21 @@ def plan_delete(key: str) -> str:
 
 
 def list_available_agents() -> str:
-    """List all available agent directories in the agents/ folder.
+    """List all registered agents by running `agenthost agent list`.
 
-    Returns an array of agent names (folder names) that have a valid
-    WHOAMI.md file.
+    Returns an array of agent names (aliases) that have a valid WHOAMI.md file.
     """
-    agents: list[dict[str, object]] = []
-    if not _AGENTS_DIR.is_dir():
-        return json.dumps({"error": "Agents directory not found."})
-
-    for entry in sorted(_AGENTS_DIR.iterdir()):
-        if entry.is_dir() and (entry / "WHOAMI.md").exists():
-            agents.append({
-                "name": entry.name,
-                "has_tools": (entry / "tools").is_dir(),
-                "has_skills": (entry / "skills").is_dir(),
-            })
+    agents = _run_agenthost_agent_list()
+    result: list[dict[str, object]] = []
+    for alias, path in sorted(agents.items()):
+        result.append({
+            "name": alias,
+            "path": str(path),
+            "has_tools": (path / "tools").is_dir(),
+            "has_skills": (path / "skills").is_dir(),
+        })
 
     return json.dumps({
-        "count": len(agents),
-        "agents": agents,
+        "count": len(result),
+        "agents": result,
     }, indent=2)

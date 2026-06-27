@@ -1,4 +1,4 @@
-"""CLI entry point: agenthost serve | agenthost chat | agenthost list | agenthost key."""
+"""CLI entry point: agenthost serve | agenthost chat | agenthost list | agenthost key | agenthost agent."""
 
 from __future__ import annotations
 
@@ -8,7 +8,9 @@ import json
 import sys
 from pathlib import Path
 
+from agenthost.agents_config import AgentsConfig
 from agenthost.config import AgentConfig
+from agenthost.home import get_keys_db_path
 from agenthost.registry import list_agents
 from agenthost.server import serve
 from agenthost.secure_key import (
@@ -25,7 +27,10 @@ def _add_serve_parser(
     subparsers: argparse._SubParsersAction,
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser("serve", help="Serve an agent package.")
-    parser.add_argument("agent", help="Path to the agent folder containing WHOAMI.md.")
+    parser.add_argument(
+        "agent",
+        help="Agent alias (from agents.yaml) or path to the agent folder containing WHOAMI.md.",
+    )
     return parser
 
 
@@ -66,8 +71,17 @@ def _add_list_parser(subparsers: argparse._SubParsersAction) -> argparse.Argumen
     return parser
 
 
+def _resolve_agent_path(alias_or_path: str) -> Path:
+    """Resolve an agent alias or folder path to an absolute Path."""
+    agents_config = AgentsConfig()
+    resolved = agents_config.resolve(alias_or_path)
+    if resolved is not None:
+        return resolved
+    return Path(alias_or_path).expanduser().resolve()
+
+
 def _do_serve(args: argparse.Namespace) -> int:
-    config = AgentConfig.from_path(args.agent)
+    config = AgentConfig.from_path(_resolve_agent_path(args.agent))
     serve(config)
     return 0
 
@@ -241,7 +255,7 @@ def _add_key_parser(
     # key list
     list_p = key_sub.add_parser("list", help="List all key names.")
     list_p.add_argument(
-        "--db", default="keys.kdbx", help="Path to .kdbx file (default: keys.kdbx)"
+        "--db", default=str(get_keys_db_path()), help=f"Path to .kdbx file (default: {get_keys_db_path()})"
     )
     list_p.add_argument(
         "--password", help="Master password (will prompt securely if omitted)"
@@ -250,7 +264,7 @@ def _add_key_parser(
     # key add
     add_p = key_sub.add_parser("add", help="Add a new API key.")
     add_p.add_argument(
-        "--db", default="keys.kdbx", help="Path to .kdbx file (default: keys.kdbx)"
+        "--db", default=str(get_keys_db_path()), help=f"Path to .kdbx file (default: {get_keys_db_path()})"
     )
     add_p.add_argument(
         "--password", help="Master password (will prompt securely if omitted)"
@@ -263,7 +277,7 @@ def _add_key_parser(
     # key edit
     edit_p = key_sub.add_parser("edit", help="Edit an existing API key.")
     edit_p.add_argument(
-        "--db", default="keys.kdbx", help="Path to .kdbx file (default: keys.kdbx)"
+        "--db", default=str(get_keys_db_path()), help=f"Path to .kdbx file (default: {get_keys_db_path()})"
     )
     edit_p.add_argument(
         "--password", help="Master password (will prompt securely if omitted)"
@@ -387,10 +401,91 @@ def _do_key(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_agent_parser(
+    subparsers: argparse._SubParsersAction,
+) -> argparse.ArgumentParser:
+    """Add agent subcommand group: list, add, remove."""
+    parser = subparsers.add_parser(
+        "agent", help="Manage registered agent aliases."
+    )
+    agent_sub = parser.add_subparsers(dest="agent_command", required=True)
+
+    # agent list
+    agent_sub.add_parser("list", help="List registered agent aliases.")
+
+    # agent add
+    add_p = agent_sub.add_parser("add", help="Register an agent alias.")
+    add_p.add_argument("alias", help="Short name for the agent.")
+    add_p.add_argument("path", help="Path to the agent folder.")
+
+    # agent remove
+    rm_p = agent_sub.add_parser("remove", help="Remove an agent alias.")
+    rm_p.add_argument("alias", help="Short name for the agent.")
+
+    return parser
+
+
+def _do_agent(args: argparse.Namespace) -> int:
+    """Dispatch agent subcommands."""
+    agents_config = AgentsConfig()
+
+    if args.agent_command == "list":
+        aliases = agents_config.list()
+        if not aliases:
+            print("No agents registered.")
+            return 0
+        for alias, path in sorted(aliases.items()):
+            print(f"{alias:<20} {path}")
+        return 0
+
+    if args.agent_command == "add":
+        agent_path = Path(args.path).expanduser().resolve()
+        if not agent_path.is_dir():
+            print(f"\u274c Not a directory: {agent_path}", file=sys.stderr)
+            return 1
+        if not (agent_path / "WHOAMI.md").exists():
+            print(
+                f"\u274c Agent folder missing WHOAMI.md: {agent_path}",
+                file=sys.stderr,
+            )
+            return 1
+        agents_config.add(args.alias, agent_path)
+        print(f"\u2705 Registered '{args.alias}' -> {agent_path}")
+        return 0
+
+    if args.agent_command == "remove":
+        if agents_config.remove(args.alias):
+            print(f"\u2705 Removed alias '{args.alias}'.")
+            return 0
+        print(f"\u274c Alias not found: {args.alias}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+def _format_commands(parser: argparse.ArgumentParser, indent: int = 0) -> list[str]:
+    """Recursively collect command names and help text for --help output."""
+    lines: list[str] = []
+    if parser._subparsers is None:
+        return lines
+    for action in parser._subparsers._actions:
+        if not isinstance(action, argparse._SubParsersAction):
+            continue
+        for choice in action._choices_actions:
+            name = choice.dest
+            help_text = choice.help or ""
+            lines.append("  " * indent + f"{name:<15} {help_text}")
+            subparser = action._name_parser_map.get(name)
+            if subparser is not None:
+                lines.extend(_format_commands(subparser, indent + 1))
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="agenthost",
         description="Host and chat with folder-based agents.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -398,14 +493,21 @@ def main(argv: list[str] | None = None) -> int:
     _add_chat_parser(subparsers)
     _add_list_parser(subparsers)
     _add_key_parser(subparsers)
+    _add_agent_parser(subparsers)
+
+    parser.epilog = "\n".join(
+        ["commands:", ""] + _format_commands(parser)
+    )
 
     args = parser.parse_args(argv)
 
     if args.command == "key":
         return _do_key(args)
+    if args.command == "agent":
+        return _do_agent(args)
 
     # MUST KEEP FOR API KEY TO LOAD FROM ENVIRONMENT VARIABLES
-    load_keepass_env("keys.kdbx", "OPENAI_API_KEY", "c1bc0bgq")
+    load_keepass_env(str(get_keys_db_path()), "OPENAI_API_KEY", "c1bc0bgq")
 
     if args.command == "serve":
         return _do_serve(args)

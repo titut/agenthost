@@ -5,8 +5,8 @@ import importlib.util
 from pathlib import Path
 
 
-# Repository root is three levels above this file: agents/SW_DEV/tools/write.py
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# Operations are scoped to the directory from which agenthost was invoked.
+_REPO_ROOT = Path.cwd()
 
 
 def _load_backup_helper():
@@ -28,7 +28,7 @@ def write_file(path: str, content: str) -> dict:
 
     Creates parent directories automatically. Overwrites existing files, but
     only after creating a timestamped backup under
-    .agenthost/backups/<timestamp>/<path>.
+    <SW_DEV agent>/.backup/<timestamp>/<path>.
 
     Use this for creating new files. For modifying existing files, prefer
     edit_file(old_string, new_string) so only a targeted snippet is changed.
@@ -70,5 +70,5 @@ def write_file(path: str, content: str) -> dict:
         "bytes": target.stat().st_size,
     }
     if backup_path is not None:
-        result["backup"] = str(backup_path.relative_to(_REPO_ROOT))
+        result["backup"] = str(backup_path)
     return result

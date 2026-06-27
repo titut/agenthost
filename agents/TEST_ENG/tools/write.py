@@ -4,8 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 
 
-# Repository root is three levels above this file: agents/TEST_ENG/tools/write.py
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# Operations are scoped to the directory from which agenthost was invoked.
+_REPO_ROOT = Path.cwd()
 
 
 def write_file(path: str, content: str) -> dict:

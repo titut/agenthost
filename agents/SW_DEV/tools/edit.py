@@ -5,8 +5,8 @@ import importlib.util
 from pathlib import Path
 
 
-# Repository root is three levels above this file: agents/SW_DEV/tools/edit.py
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# Operations are scoped to the directory from which agenthost was invoked.
+_REPO_ROOT = Path.cwd()
 
 
 def _load_backup_helper():
@@ -32,7 +32,7 @@ def edit_file(path: str, old_string: str, new_string: str) -> dict:
     operation fails and the file is left untouched.
 
     Before any change, the current file is backed up to
-    .agenthost/backups/<timestamp>/<path>.
+    <SW_DEV agent>/.backup/<timestamp>/<path>.
 
     Args:
         path: File path relative to the repository root. Must exist.
@@ -91,5 +91,5 @@ def edit_file(path: str, old_string: str, new_string: str) -> dict:
         "status": "edited",
         "path": str(target.relative_to(_REPO_ROOT)),
         "bytes": target.stat().st_size,
-        "backup": str(backup_path.relative_to(_REPO_ROOT)),
+        "backup": str(backup_path),
     }
