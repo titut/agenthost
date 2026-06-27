@@ -151,13 +151,18 @@ Options:
 | `--once`      | Send a single message and exit (requires `--message`)     |
 | `--no-tui`    | Use the simple text REPL instead of the full-screen TUI   |
 
-The CLI streams content, tool calls, and tool results in real time. In the simple REPL, commands are:
+The CLI streams content, tool calls, and tool results in real time.
 
-In the TUI, use `Ctrl+Q` to quit and `Ctrl+C` to interrupt streaming.
+In the simple REPL (`--no-tui`), commands are:
 
 - `/quit`, `/exit`, `/q` — End the session
 - `/help` — Show available commands
 - `/thread` — Show the current thread ID
+
+In the TUI:
+- `Ctrl+Q` — Quit
+- `Ctrl+C` — Interrupt streaming
+- `/clear`, `/stop`, `/context` — See the chat section above
 
 ### `agenthost list`
 
@@ -247,8 +252,10 @@ Turns architecture specs into clean, working, production-grade code. Reads befor
 - `read_file(path, max_lines)` — Read source, specs, and configs
 - `write_file(path, content)` — Create new files (with automatic backups)
 - `edit_file(path, old_string, new_string)` — Targeted snippet replacement (with automatic backups)
+- `run_terminal(command, timeout)` — Run a shell command in the repository root
+- `delete_file(path, recursive)` — Delete a file or directory (with automatic backups)
 
-**Backup system:** Every `write_file` and `edit_file` operation creates a timestamped backup under `.agenthost/backups/<timestamp>/<path>` before overwriting, enabling easy rollback.
+**Backup system:** Every destructive operation (`write_file`, `edit_file`, `delete_file`) creates a timestamped backup under the agent's own `.backup/<timestamp>/<path>` directory before overwriting or deleting, enabling easy rollback. Recursive directory deletes are archived as `.zip` backups.
 
 **Skills:** `development-patterns.md` — when to create vs. extend, conventions, quality standards.
 
@@ -396,14 +403,15 @@ On serve startup, the conversation history is cleared (fresh start).
 
 ## Backup System
 
-SW_DEV's `write_file` and `edit_file` tools automatically create timestamped backups before any write operation:
+SW_DEV's destructive tools (`write_file`, `edit_file`, `delete_file`) automatically create timestamped backups before any overwrite or deletion:
 
 ```
-.agenthost/backups/20250405-143022/agents/SW_DEV/tools/edit.py
-.agenthost/backups/20250405-143022/README.md
+agents/SW_DEV/.backup/2026-06-28T12:34:56/home/koroko/Workspace/agenthub/src/agenthost/cli.py
+agents/SW_DEV/.backup/2026-06-28T12:34:56/home/koroko/Workspace/agenthub/README.md
+agents/SW_DEV/.backup/2026-06-28T12:34:56/home/koroko/Workspace/agenthub/old_dir.zip
 ```
 
-This enables easy rollback. Backups are stored under `.agenthost/backups/<timestamp>/<relative-path>`.
+This enables easy rollback. Backups are stored under the agent's own `.backup/<iso-timestamp>/<full-path>` directory. Files preserve their exact bytes; non-empty directories deleted with `recursive=True` are archived as `.zip` files.
 
 ---
 
@@ -497,14 +505,15 @@ src/agenthost/
 
 | Module        | Lines | Purpose                                           |
 |---------------|-------|---------------------------------------------------|
-| `cli.py`      | 421   | Argument parsing and dispatch for all subcommands |
-| `agent.py`    | 100   | Core agent loop: LLM streaming + tool execution   |
-| `server.py`   | 110   | FastAPI app with SSE streaming chat endpoint      |
+| `cli.py`      | ~580  | Argument parsing and dispatch for all subcommands |
+| `chat_tui.py` | ~800  | Textual TUI for `agenthost chat`                  |
+| `agent.py`    | ~140  | Core agent loop: LLM streaming + tool execution   |
+| `server.py`   | ~150  | FastAPI app with `/health`, `/chat`, `/clear`     |
 | `config.py`   | 107   | Agent folder parsing, system prompt assembly      |
 | `tools.py`    | 169   | Auto-discovery of Python tool files, JSON schema generation, argument coercion |
-| `memory.py`   | 135   | SQLite-backed messages + KV store with auto-trim  |
+| `memory.py`   | ~190  | SQLite-backed messages + KV store with auto-trim  |
 | `registry.py` | 116   | JSON process registry with PID health checks      |
-| `secure_key.py`| 178  | KeePass database management via pykeepass         |
+| `secure_key.py`| ~240 | KeePass database management via pykeepass         |
 | `skills.py`   | 19    | Markdown skill file loader                        |
 
 ---
