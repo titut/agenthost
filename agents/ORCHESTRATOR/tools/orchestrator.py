@@ -1,4 +1,4 @@
-"""ORCHESTRATOR tools: agent lifecycle management."""
+"""ORCHESTRATOR tools: agent lifecycle management and plan tracking."""
 from __future__ import annotations
 
 import calendar
@@ -450,4 +450,101 @@ def list_agents() -> str:
         "max": _MAX_AGENTS,
         "slots_remaining": _MAX_AGENTS - len(agents_list),
         "agents": agents_list,
+    }, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Plan Management Tools
+# ---------------------------------------------------------------------------
+
+def _get_memory() -> tuple:
+    """Create and return (AgentMemory, AgentConfig) for the ORCHESTRATOR."""
+    from agenthost.memory import AgentMemory
+    from agenthost.config import AgentConfig
+    config = AgentConfig(path=_REPO_ROOT / "agents" / "ORCHESTRATOR", name="ORCHESTRATOR")
+    memory = AgentMemory(config)
+    return memory, config
+
+
+def plan_save(key: str, plan_json: str) -> str:
+    """Save a plan (or any JSON value) to the ORCHESTRATOR's KV store.
+
+    The key should follow the format 'plan:<plan_id>' for plans.
+    The value must be a valid JSON string.
+
+    Returns a confirmation or error message.
+    """
+    # Validate JSON before saving
+    try:
+        parsed = json.loads(plan_json)
+    except json.JSONDecodeError as exc:
+        return json.dumps({"error": f"Invalid JSON: {exc}"})
+
+    try:
+        memory, _config = _get_memory()
+        memory.set(key, parsed)
+        return json.dumps({"success": True, "key": key, "size_bytes": len(plan_json)})
+    except Exception as exc:
+        return json.dumps({"error": f"Failed to save plan: {exc}"})
+
+
+def plan_load(key: str) -> str:
+    """Load a plan (or any JSON value) from the ORCHESTRATOR's KV store by key.
+
+    Returns the stored JSON as a string, or an error if the key does not exist.
+    """
+    try:
+        memory, _config = _get_memory()
+        value = memory.get(key)
+        if value is None:
+            return json.dumps({"error": f"No data found for key '{key}'."})
+        return json.dumps({"success": True, "key": key, "data": value}, indent=2)
+    except Exception as exc:
+        return json.dumps({"error": f"Failed to load plan: {exc}"})
+
+
+def plan_delete(key: str) -> str:
+    """Delete a plan (or any key) from the ORCHESTRATOR's KV store.
+
+    Returns a confirmation or error if the key does not exist.
+    """
+    try:
+        memory, _config = _get_memory()
+        existing = memory.get(key)
+        if existing is None:
+            return json.dumps({"error": f"No data found for key '{key}'."})
+        memory.set(key, None)  # kv store uses set with None to clear
+        # We need to actually delete the key. Let's use sqlite directly.
+        import sqlite3
+        db_path = _ORCHESTRATOR_MEMORY_DIR / "memory.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("DELETE FROM kv WHERE key = ?", (key,))
+        conn.commit()
+        conn.close()
+        return json.dumps({"success": True, "key": key, "action": "deleted"})
+    except Exception as exc:
+        return json.dumps({"error": f"Failed to delete plan: {exc}"})
+
+
+def list_available_agents() -> str:
+    """List all available agent directories in the agents/ folder.
+
+    Returns an array of agent names (folder names) that have a valid
+    WHOAMI.md file.
+    """
+    agents: list[dict[str, object]] = []
+    if not _AGENTS_DIR.is_dir():
+        return json.dumps({"error": "Agents directory not found."})
+
+    for entry in sorted(_AGENTS_DIR.iterdir()):
+        if entry.is_dir() and (entry / "WHOAMI.md").exists():
+            agents.append({
+                "name": entry.name,
+                "has_tools": (entry / "tools").is_dir(),
+                "has_skills": (entry / "skills").is_dir(),
+            })
+
+    return json.dumps({
+        "count": len(agents),
+        "agents": agents,
     }, indent=2)
