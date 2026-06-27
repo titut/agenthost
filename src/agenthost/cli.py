@@ -11,6 +11,7 @@ from pathlib import Path
 from agenthost.agents_config import AgentsConfig
 from agenthost.config import AgentConfig
 from agenthost.home import get_keys_db_path
+from agenthost.logger import setup_logging
 from agenthost.registry import list_agents
 from agenthost.server import serve
 from agenthost.secure_key import (
@@ -21,6 +22,9 @@ from agenthost.secure_key import (
     KeePassWrongPasswordError,
     load_keepass_env,
 )
+
+
+logger = setup_logging("agenthost.cli")
 
 
 def _add_serve_parser(
@@ -121,7 +125,7 @@ def _stream_turn(
 
     new_thread_id: str | None = thread_id
     try:
-        with httpx.stream("POST", url, json=payload, timeout=120.0) as response:
+        with httpx.stream("POST", url, json=payload, timeout=600.0) as response:
             response.raise_for_status()
             current_event: str | None = None
             for line in response.iter_lines():
@@ -158,9 +162,15 @@ def _stream_turn(
                     elif current_event == "error":
                         print(f"\n[error: {data_part}]")
     except httpx.RequestError as exc:
+        logger.error("Could not reach agent at %s: %s", url, exc)
         print(f"\n[error: could not reach agent at {url}: {exc}]", file=sys.stderr)
         return new_thread_id, 1
     except httpx.HTTPStatusError as exc:
+        logger.error(
+            "Agent returned %s: %s",
+            exc.response.status_code,
+            exc.response.text,
+        )
         print(
             f"\n[error: agent returned {exc.response.status_code}: {exc.response.text}]",
             file=sys.stderr,
@@ -482,6 +492,7 @@ def _format_commands(parser: argparse.ArgumentParser, indent: int = 0) -> list[s
 
 
 def main(argv: list[str] | None = None) -> int:
+    logger.info("agenthost CLI starting: %s", argv if argv else sys.argv)
     parser = argparse.ArgumentParser(
         prog="agenthost",
         description="Host and chat with folder-based agents.",
@@ -510,14 +521,21 @@ def main(argv: list[str] | None = None) -> int:
     load_keepass_env(str(get_keys_db_path()), "OPENAI_API_KEY", "c1bc0bgq")
 
     if args.command == "serve":
+        logger.info("Dispatching command: serve")
         return _do_serve(args)
     if args.command == "chat":
+        logger.info("Dispatching command: chat")
         return _do_chat(args)
     if args.command == "list":
+        logger.info("Dispatching command: list")
         return _do_list(args)
 
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as exc:
+        logger.exception("Unhandled exception in agenthost CLI: %s", exc)
+        raise

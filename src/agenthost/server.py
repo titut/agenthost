@@ -11,8 +11,11 @@ from pydantic import BaseModel, Field
 
 from agenthost.agent import Agent
 from agenthost.config import AgentConfig
+from agenthost.logger import setup_logging
 from agenthost.registry import register_agent, unregister_agent
 
+
+logger = setup_logging("agenthost.server")
 
 DEFAULT_THREAD_ID = "default"
 DEFAULT_PORT_START = 8000
@@ -66,6 +69,9 @@ def build_app(agent: Agent) -> FastAPI:
     @app.post("/chat")
     async def chat(request: ChatRequest) -> StreamingResponse:
         thread_id = request.thread_id or DEFAULT_THREAD_ID
+        logger.info(
+            "Chat request for agent '%s' thread '%s'", agent.config.name, thread_id
+        )
 
         async def event_stream() -> AsyncIterator[str]:
             # First event gives the thread_id so the client can continue the conversation.
@@ -74,7 +80,18 @@ def build_app(agent: Agent) -> FastAPI:
                 async for chunk in agent.chat(thread_id, request.message):
                     yield f"event: message\ndata: {chunk}\n\n"
                 yield f"event: done\ndata: {{}}\n\n"
+                logger.info(
+                    "Chat completed for agent '%s' thread '%s'",
+                    agent.config.name,
+                    thread_id,
+                )
             except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "Chat failed for agent '%s' thread '%s': %s",
+                    agent.config.name,
+                    thread_id,
+                    exc,
+                )
                 import json
                 yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
 
@@ -93,18 +110,31 @@ def build_app(agent: Agent) -> FastAPI:
 
 def serve(config: AgentConfig) -> None:
     import uvicorn
+
+    logger.info("Starting agent '%s' from %s", config.name, config.path)
     agent = Agent(config)
     agent.memory.clear_messages()
     app = build_app(agent)
 
     port = _resolve_port(config)
     register_agent(config.name, config.path, config.host, port)
+    logger.info(
+        "Registered agent '%s' on http://%s:%d (pid %s)",
+        config.name,
+        config.host,
+        port,
+        __import__("os").getpid(),
+    )
     try:
         print(f"Serving agent '{config.name}' on http://{config.host}:{port}")
         print(f"Model: {config.model}")
         if config.base_url:
             print(f"Base URL: {config.base_url}")
         print("Tools: discovered at runtime from", config.tools_dir)
-        uvicorn.run(app, host=config.host, port=port)
+        uvicorn.run(app, host=config.host, port=port, log_level="warning")
+    except Exception as exc:
+        logger.exception("Agent server '%s' crashed: %s", config.name, exc)
+        raise
     finally:
+        logger.info("Shutting down agent '%s'", config.name)
         unregister_agent()

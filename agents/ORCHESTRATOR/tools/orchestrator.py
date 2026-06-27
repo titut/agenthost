@@ -15,6 +15,10 @@ from pathlib import Path
 
 import httpx
 
+from agenthost.logger import setup_logging
+
+logger = setup_logging("agenthost.orchestrator")
+
 _MAX_AGENTS = 3
 _HEALTH_TIMEOUT = 15  # seconds to wait for agent to become healthy
 _DESPAWN_GRACE = 5    # seconds to wait after SIGTERM before SIGKILL
@@ -57,9 +61,9 @@ def _get_registry() -> dict:
 
     config = AgentConfig(path=_get_orchestrator_path(), name="ORCHESTRATOR")
     memory = AgentMemory(config)
-    # Return a deep copy so callers can mutate the dict without affecting the
-    # stored snapshot until _save_registry is called.
-    return copy.deepcopy(memory.get(_REGISTRY_KEY, {}))
+    registry = copy.deepcopy(memory.get(_REGISTRY_KEY, {}))
+    logger.debug("Loaded ORCHESTRATOR registry with %d entries", len(registry))
+    return registry
 
 
 def _save_registry(registry: dict) -> None:
@@ -70,6 +74,7 @@ def _save_registry(registry: dict) -> None:
     config = AgentConfig(path=_get_orchestrator_path(), name="ORCHESTRATOR")
     memory = AgentMemory(config)
     memory.set(_REGISTRY_KEY, registry)
+    logger.debug("Saved ORCHESTRATOR registry with %d entries", len(registry))
 
 
 def _run_agenthost_list() -> list[dict[str, object]]:
@@ -78,6 +83,7 @@ def _run_agenthost_list() -> list[dict[str, object]]:
     Returns records like:
     [{"name": "RESEARCHER", "host": "127.0.0.1", "port": 8000, "pid": 12345, "path": "..."}]
     """
+    logger.debug("Running `agenthost list`")
     try:
         result = subprocess.run(
             [sys.executable, "-m", "agenthost", "list"],
@@ -86,7 +92,8 @@ def _run_agenthost_list() -> list[dict[str, object]]:
             check=False,
             timeout=10.0,
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("`agenthost list` failed: %s", exc)
         return []
 
     lines = result.stdout.strip().splitlines()
@@ -105,6 +112,7 @@ def _run_agenthost_list() -> list[dict[str, object]]:
                 })
             except ValueError:
                 continue
+    logger.debug("`agenthost list` returned %d active agents", len(agents))
     return agents
 
 
@@ -113,6 +121,7 @@ def _run_agenthost_agent_list() -> dict[str, Path]:
 
     Only returns entries whose path exists and contains WHOAMI.md.
     """
+    logger.debug("Running `agenthost agent list`")
     try:
         result = subprocess.run(
             [sys.executable, "-m", "agenthost", "agent", "list"],
@@ -121,7 +130,8 @@ def _run_agenthost_agent_list() -> dict[str, Path]:
             check=False,
             timeout=10.0,
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("`agenthost agent list` failed: %s", exc)
         return {}
 
     agents: dict[str, Path] = {}
@@ -211,10 +221,12 @@ def spawn_agent(name: str) -> str:
 
     Max 3 concurrent agents. Returns an agent_id (UUID) on success.
     """
+    logger.info("ORCHESTRATOR spawn_agent('%s')", name)
     registry = _get_registry()
     running = {k: v for k, v in registry.items() if v.get("status") == "running"}
 
     if len(running) >= _MAX_AGENTS:
+        logger.warning("ORCHESTRATOR at max agents (%d) when spawning '%s'", _MAX_AGENTS, name)
         return json.dumps({
             "error": f"Already at max ({_MAX_AGENTS}) concurrent agents. Despawn one first.",
             "running_agents": [{"agent_id": k, "name": v["name"], "port": v["port"]}
@@ -224,9 +236,11 @@ def spawn_agent(name: str) -> str:
     agents = _run_agenthost_agent_list()
     agent_dir = agents.get(name)
     if agent_dir is None:
+        logger.error("ORCHESTRATOR cannot spawn unregistered agent '%s'", name)
         return json.dumps({"error": f"Agent not registered: {name}"})
 
     if not agent_dir.is_dir() or not (agent_dir / "WHOAMI.md").exists():
+        logger.error("ORCHESTRATOR agent folder missing for '%s': %s", name, agent_dir)
         return json.dumps({"error": f"Agent folder not found: {agent_dir}"})
 
     try:
@@ -235,7 +249,9 @@ def spawn_agent(name: str) -> str:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        logger.info("ORCHESTRATOR started agent '%s' as pid %d", name, proc.pid)
     except Exception as exc:
+        logger.exception("ORCHESTRATOR failed to spawn agent '%s': %s", name, exc)
         return json.dumps({"error": f"Failed to start subprocess: {exc}"})
 
     # Track the process so we can reap it later and avoid zombies.
@@ -254,6 +270,7 @@ def spawn_agent(name: str) -> str:
         time.sleep(0.1)
 
     if assigned_port is None:
+        logger.error("ORCHESTRATOR could not discover port for spawned agent '%s'", name)
         proc.kill()
         try:
             proc.wait(timeout=2.0)
@@ -262,6 +279,7 @@ def spawn_agent(name: str) -> str:
         return json.dumps({"error": f"Could not discover assigned port for agent '{name}'."})
 
     port = assigned_port
+    logger.info("ORCHESTRATOR discovered agent '%s' on port %d", name, port)
 
     # Health poll
     health_url = f"http://127.0.0.1:{port}/health"
@@ -313,24 +331,30 @@ def send_message(agent_id: str, message: str) -> str:
     conversation retains memory. A new spawn gets a new thread_id.
     The agent must be running.
     """
+    logger.info("ORCHESTRATOR send_message(agent_id='%s')", agent_id)
     registry = _get_registry()
     entry = registry.get(agent_id)
 
     if not entry:
+        logger.error("ORCHESTRATOR send_message: no agent with id '%s'", agent_id)
         return json.dumps({"error": f"No agent found with ID '{agent_id}'. Use list_agents to see running agents."})
 
     if entry.get("status") != "running":
+        logger.warning("ORCHESTRATOR send_message: agent '%s' status is '%s'", agent_id, entry.get("status"))
         return json.dumps({"error": f"Agent '{agent_id}' ({entry['name']}) is not running. Despawn and re-spawn."})
 
     port = entry["port"]
     chat_url = f"http://127.0.0.1:{port}/chat"
+    logger.info("ORCHESTRATOR send_message: target is '%s' on port %d", entry.get("name"), port)
 
     # Health check first
     try:
         health_resp = httpx.get(f"http://127.0.0.1:{port}/health", timeout=2.0)
         if health_resp.status_code != 200:
             raise RuntimeError("Health check failed")
-    except Exception:
+        logger.debug("ORCHESTRATOR send_message: health check passed for port %d", port)
+    except Exception as exc:
+        logger.warning("ORCHESTRATOR send_message: health check failed for port %d: %s", port, exc)
         return json.dumps({
             "error": f"Agent '{entry['name']}' (port {port}) is not responding. "
                      f"Use despawn_agent('{agent_id}') and re-spawn."
@@ -347,7 +371,7 @@ def send_message(agent_id: str, message: str) -> str:
 
     try:
         response_text = ""
-        with httpx.stream("POST", chat_url, json=payload, timeout=300.0) as resp:
+        with httpx.stream("POST", chat_url, json=payload, timeout=60.0) as resp:
             resp.raise_for_status()
             current_event = None
             for line in resp.iter_lines():
@@ -363,12 +387,14 @@ def send_message(agent_id: str, message: str) -> str:
                     if data.get("type") == "content":
                         response_text += data["data"]
 
+        logger.info("ORCHESTRATOR send_message: received response from '%s' (%d chars)", entry.get("name"), len(response_text))
         return json.dumps({
             "agent_id": agent_id,
             "name": entry["name"],
             "response": response_text,
         })
     except Exception as exc:
+        logger.exception("ORCHESTRATOR send_message: communication with '%s' on port %d failed: %s", entry.get("name"), port, exc)
         return json.dumps({"error": f"Communication with agent failed: {exc}"})
 
 
@@ -437,6 +463,7 @@ def list_agents() -> str:
     Refreshes port/status information from `agenthost list` so the ORCHESTRATOR
     stays in sync with the actual state of running agents.
     """
+    logger.info("ORCHESTRATOR list_agents()")
     registry = _get_registry()
     active = {a["name"]: a for a in _run_agenthost_list()}
 
@@ -450,11 +477,17 @@ def list_agents() -> str:
             entry["port"] = live["port"]
             entry["host"] = live["host"]
         else:
+            logger.warning(
+                "ORCHESTRATOR list_agents: marking agent '%s' (pid %s) as down",
+                name,
+                entry.get("pid"),
+            )
             entry["status"] = "down"
 
     # Remove entries that have been down for a while or no longer exist in agenthost list.
     registry = {k: v for k, v in registry.items() if v.get("status") == "running"}
     _save_registry(registry)
+    logger.info("ORCHESTRATOR list_agents: %d running agents", len(registry))
 
     running = registry
 

@@ -7,8 +7,12 @@ from typing import Any, AsyncIterator
 from openai import AsyncOpenAI
 
 from agenthost.config import AgentConfig
+from agenthost.logger import setup_logging
 from agenthost.memory import AgentMemory
 from agenthost.tools import ToolRunner, discover_tools
+
+
+logger = setup_logging("agenthost.agent")
 
 
 class Agent:
@@ -25,6 +29,15 @@ class Agent:
         self.tool_schemas, self.tool_runner = discover_tools(config.tools_dir)
 
     async def chat(self, thread_id: str, user_message: str) -> AsyncIterator[str]:
+        logger.info(
+            "Agent '%s' thread '%s' received user message", self.config.name, thread_id
+        )
+        # Clean up any dangling assistant tool_calls from previous interrupted turns.
+        removed = self.memory.repair_thread(thread_id)
+        if removed:
+            logger.warning(
+                "Repaired %d dangling tool_calls in thread '%s'", removed, thread_id
+            )
         self.memory.append_message(thread_id, {"role": "user", "content": user_message})
         messages = self._build_messages(thread_id)
 
@@ -74,8 +87,27 @@ class Agent:
                     except json.JSONDecodeError:
                         args = {}
 
+                    logger.info(
+                        "Agent '%s' thread '%s' calling tool '%s'",
+                        self.config.name,
+                        thread_id,
+                        name,
+                    )
                     yield json.dumps({"type": "tool_start", "data": {"name": name, "arguments": args}}) + "\n"
-                    result = await self.tool_runner.run(name, args)
+                    try:
+                        result = await self.tool_runner.run(name, args)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception(
+                            "Tool '%s' failed for agent '%s' thread '%s': %s",
+                            name,
+                            self.config.name,
+                            thread_id,
+                            exc,
+                        )
+                        result = json.dumps(
+                            {"error": f"Tool '{name}' failed: {type(exc).__name__}: {exc}"}
+                        )
+                        yield json.dumps({"type": "tool_error", "data": {"name": name, "error": result}}) + "\n"
                     yield json.dumps({"type": "tool_result", "data": {"name": name, "result": result}}) + "\n"
 
                     tool_msg = {
@@ -92,6 +124,12 @@ class Agent:
 
             if assistant_content:
                 self.memory.append_message(thread_id, {"role": "assistant", "content": assistant_content})
+            logger.info(
+                "Agent '%s' thread '%s' finished turn with %d total messages",
+                self.config.name,
+                thread_id,
+                len(messages),
+            )
             break
 
     def _build_messages(self, thread_id: str) -> list[dict[str, Any]]:

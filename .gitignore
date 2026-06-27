@@ -21,6 +21,7 @@ agents/*/memory/
 
 # ── Agent-generated output (architecture, test plans, etc.) ──────────
 agents/*/output/
+agents/*/.backup
 
 # ── Runtime registry ────────────────────────────────────────────────
 .agenthost-registry.json

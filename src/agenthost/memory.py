@@ -76,6 +76,54 @@ class AgentMemory:
             messages.append(msg)
         return messages
 
+    def repair_thread(self, thread_id: str) -> int:
+        """Remove assistant 'tool_calls' messages with no matching tool responses.
+
+        This can happen if a tool hung or crashed after the assistant message was
+        persisted. OpenAI rejects conversations with unanswered tool_calls.
+        Returns the number of dangling assistant messages removed.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, role, tool_calls, tool_call_id FROM messages "
+                "WHERE thread_id = ? ORDER BY id",
+                (thread_id,),
+            ).fetchall()
+
+        ids_to_delete: list[int] = []
+        i = 0
+        while i < len(rows):
+            row = rows[i]
+            if row["role"] != "assistant" or not row["tool_calls"]:
+                i += 1
+                continue
+
+            tool_calls = json.loads(row["tool_calls"])
+            expected_ids = {tc.get("id") for tc in tool_calls if tc.get("id")}
+            if not expected_ids:
+                i += 1
+                continue
+
+            j = i + 1
+            found_ids: set[str] = set()
+            while j < len(rows) and rows[j]["role"] == "tool":
+                found_ids.add(rows[j]["tool_call_id"])
+                j += 1
+
+            if not expected_ids <= found_ids:
+                ids_to_delete.append(row["id"])
+            i = j
+
+        if ids_to_delete:
+            with self._connect() as conn:
+                placeholders = ",".join("?" * len(ids_to_delete))
+                conn.execute(
+                    f"DELETE FROM messages WHERE id IN ({placeholders})",
+                    tuple(ids_to_delete),
+                )
+                conn.commit()
+        return len(ids_to_delete)
+
     def append_message(self, thread_id: str, message: dict[str, Any]) -> None:
         tool_calls = json.dumps(message.get("tool_calls")) if message.get("tool_calls") else None
         with self._connect() as conn:
