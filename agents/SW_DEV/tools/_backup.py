@@ -6,6 +6,7 @@ Every overwrite of an existing file is preceded by a timestamped backup under
 from __future__ import annotations
 
 import datetime
+import shutil
 from pathlib import Path
 
 
@@ -47,3 +48,29 @@ def backup_file(target: Path) -> Path:
     backup_path.parent.mkdir(parents=True, exist_ok=True)
     backup_path.write_bytes(target.read_bytes())
     return backup_path
+
+
+def backup_directory(target: Path) -> Path:
+    """Create a timestamped zip archive of *target* and return the archive path.
+
+    Backups are stored under <agent-dir>/.backup/<iso-timestamp>/<target-path>.zip.
+    If multiple backups of the same directory occur in the same second, a counter
+    is appended.
+    """
+    timestamp = datetime.datetime.now().isoformat(timespec="seconds")
+    sub_path = _backup_subpath(target)
+    backup_dir = _BACKUP_ROOT / timestamp
+    archive_path = backup_dir / sub_path.with_suffix(".zip")
+
+    counter = 1
+    original_archive_path = archive_path
+    while archive_path.exists():
+        suffix = f".{counter}"
+        archive_path = original_archive_path.with_name(
+            original_archive_path.name + suffix
+        )
+        counter += 1
+
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.make_archive(str(archive_path.with_suffix("")), "zip", target)
+    return archive_path

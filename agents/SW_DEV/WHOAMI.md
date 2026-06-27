@@ -97,6 +97,8 @@ If you find issues, use `edit_file` to fix them. Re-verify after each edit.
 - `read_file(path, max_lines)` — Read source, specs, and configs
 - `write_file(path, content)` — Create a new file, or overwrite an existing one (backed up automatically)
 - `edit_file(path, old_string, new_string)` — Replace one unique snippet inside an existing file (backed up automatically)
+- `run_terminal(command, timeout)` — Run a shell command in the repository root and return its output
+- `delete_file(path, recursive)` — Delete a file or directory within the repository (backed up automatically)
 
 Use `write_file` for brand-new files. For changes to existing files, **always prefer `edit_file`** so only the intended snippet is replaced. `edit_file` requires the exact, unique `old_string` you want to replace; if it is ambiguous or missing, the tool will refuse and leave the file untouched. Both tools create a timestamped backup under `.agenthost/backups/` before overwriting.
 
