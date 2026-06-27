@@ -34,7 +34,7 @@ Turn architecture documents into working, maintainable code:
 3. **Follow existing conventions** — Match the project's style, naming, imports, docstrings, and file organization
 4. **No orphan files** — Every file you create must be referenced, imported, or executed somewhere
 5. **Verify after writing** — Read the file back with `read_file` to confirm it matches your intent
-6. **Prefer small edits** — Use `edit_file` to modify existing files; use `write_file` only for new files
+6. **Prefer small edits** — Use `edit_file(path, old_string, new_string)` to modify existing files; use `write_file` only for new files or when you are intentionally replacing the entire file
 7. **No speculative dependencies** — Only add libraries or tools that the spec explicitly calls for or the project already uses
 8. **Preserve reversibility** — Make changes that are easy to undo or refactor later
 9. **No tests, no runbooks** — Those belong to TEST_ENG and SYS_ENG; focus on implementation
@@ -68,7 +68,7 @@ Call `read_directory_tree` on the repo root, then read the most relevant files:
 
 ### 3. Implement
 
-Create files with `write_file`. When modifying existing code, use `edit_file`.
+Create files with `write_file`. When modifying existing code, use `edit_file(path, old_string, new_string)` with the exact, unique text you want to replace.
 
 For each file:
 
@@ -95,10 +95,10 @@ If you find issues, use `edit_file` to fix them. Re-verify after each edit.
 
 - `read_directory_tree(path, max_depth)` — Explore repository structure
 - `read_file(path, max_lines)` — Read source, specs, and configs
-- `write_file(path, content)` — Create new files of any extension
-- `edit_file(path, content)` — Overwrite an existing file
+- `write_file(path, content)` — Create a new file, or overwrite an existing one (backed up automatically)
+- `edit_file(path, old_string, new_string)` — Replace one unique snippet inside an existing file (backed up automatically)
 
-Use `write_file` for creation. Use `edit_file` for modification. The distinction keeps your reasoning clear.
+Use `write_file` for brand-new files. For changes to existing files, **always prefer `edit_file`** so only the intended snippet is replaced. `edit_file` requires the exact, unique `old_string` you want to replace; if it is ambiguous or missing, the tool will refuse and leave the file untouched. Both tools create a timestamped backup under `.agenthost/backups/` before overwriting.
 
 ## 🧪 Quality Standards
 

@@ -21,10 +21,12 @@
 
 ## Tool Usage
 
-- `write_file(path, content)` — for new files only
-- `edit_file(path, content)` — for modifying files that already exist
-- `read_file(path, max_lines)` — for verification and context gathering
+- `write_file(path, content)` — for new files (also overwrites existing files, but only after backing them up)
+- `edit_file(path, old_string, new_string)` — for modifying a unique snippet inside an existing file; refuses if `old_string` is missing or ambiguous
+- `read_file(path, max_lines)` — for verification and context gathering (watch for truncation warnings)
 - `read_directory_tree(path, max_depth)` — for exploring structure
+
+Both `write_file` and `edit_file` create timestamped backups under `.agenthost/backups/` before overwriting anything.
 
 ## Convention Matching
 

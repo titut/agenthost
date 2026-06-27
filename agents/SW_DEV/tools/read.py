@@ -1,10 +1,10 @@
-"""Repository exploration tools for the Systems Engineer agent."""
+"""Repository exploration tools for the SW_DEV agent."""
 from __future__ import annotations
 
 from pathlib import Path
 
 
-# Repository root is three levels above this file: agents/SYS_ENG/tools/read.py
+# Repository root is three levels above this file: agents/SW_DEV/tools/read.py
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 _IGNORED_DIRS = {
@@ -102,12 +102,12 @@ def read_directory_tree(path: str = ".", max_depth: int = 3) -> dict:
     }
 
 
-def read_file(path: str, max_lines: int = 300) -> dict:
+def read_file(path: str, max_lines: int = 2000) -> dict:
     """Read a text file from the repository and return its contents.
 
     Args:
         path: File path relative to the repository root.
-        max_lines: Maximum number of lines to return (default 300).
+        max_lines: Maximum number of lines to return (default 2000).
 
     Returns:
         A dict with metadata and the file content (or an error).
@@ -146,10 +146,18 @@ def read_file(path: str, max_lines: int = 300) -> dict:
     if truncated:
         lines = lines[:max_lines]
 
+    content = "\n".join(lines)
+    if truncated:
+        content += (
+            f"\n\n[WARNING: FILE TRUNCATED — only {max_lines} of {total_lines} "
+            f"lines shown. Use read_file(path='{path}', max_lines={total_lines}) "
+            f"to read the complete file before editing.]"
+        )
+
     return {
         "path": path,
         "total_lines": total_lines,
         "returned_lines": len(lines),
         "truncated": truncated,
-        "content": "\n".join(lines),
+        "content": content,
     }
