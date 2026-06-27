@@ -181,3 +181,9 @@ class AgentMemory:
         with self._connect() as conn:
             conn.execute("DELETE FROM messages")
             conn.commit()
+
+    def clear_thread(self, thread_id: str) -> None:
+        """Remove all messages for a specific thread."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
+            conn.commit()

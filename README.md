@@ -94,6 +94,14 @@ This opens a full-screen TUI chat client with:
 
 Use `--no-tui` to fall back to the simple text REPL, or `--once` for single-shot non-interactive output.
 
+TUI slash commands:
+
+| Command     | Description                                                        |
+|-------------|--------------------------------------------------------------------|
+| `/clear`    | Clear the current thread from the UI and server memory             |
+| `/stop`     | Halt an in-progress streaming response                             |
+| `/context`  | Show the current prompt attachments and files touched by tools     |
+
 Or with curl:
 
 ```bash

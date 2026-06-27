@@ -66,6 +66,16 @@ def build_app(agent: Agent) -> FastAPI:
             "tools": [t["function"]["name"] for t in agent.tool_schemas],
         }
 
+    @app.post("/clear")
+    async def clear(request: ChatRequest) -> dict:
+        """Clear the conversation history for the requested thread."""
+        thread_id = request.thread_id or DEFAULT_THREAD_ID
+        logger.info(
+            "Clear request for agent '%s' thread '%s'", agent.config.name, thread_id
+        )
+        agent.memory.clear_thread(thread_id)
+        return {"status": "cleared", "thread_id": thread_id}
+
     @app.post("/chat")
     async def chat(request: ChatRequest) -> StreamingResponse:
         thread_id = request.thread_id or DEFAULT_THREAD_ID

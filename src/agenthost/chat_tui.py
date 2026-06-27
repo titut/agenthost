@@ -388,6 +388,14 @@ class InputArea(Horizontal):
             self.text = text
             super().__init__()
 
+    class Command(Message):
+        """Posted when the user types a slash command."""
+
+        def __init__(self, name: str, args: str) -> None:
+            self.name = name
+            self.args = args
+            super().__init__()
+
     def __init__(self, **kwargs: Any) -> None:
         self.history: list[str] = []
         self.history_index: int = -1
@@ -540,7 +548,14 @@ class InputArea(Horizontal):
         self._completion_index = -1
         self.completion_list.clear()
         self.completion_list.remove_class("-visible")
-        self.post_message(self.Submitted(text))
+
+        if text.startswith("/"):
+            parts = text.split(None, 1)
+            name = parts[0][1:]
+            args = parts[1] if len(parts) > 1 else ""
+            self.post_message(self.Command(name, args))
+        else:
+            self.post_message(self.Submitted(text))
 
     def _history_up(self) -> None:
         if not self.history:
@@ -632,6 +647,7 @@ class ChatApp(App):
         self._current_assistant: AssistantMessage | None = None
         self._current_tool: ToolCallCard | None = None
         self._stream_task: asyncio.Task | None = None
+        self._stream_id: int = 0
         super().__init__()
 
     def compose(self) -> ComposeResult:
@@ -667,7 +683,7 @@ class ChatApp(App):
     @on(InputArea.Submitted)
     async def _on_input_submitted(self, event: InputArea.Submitted) -> None:
         text = event.text
-        self.chat_scroll.mount(UserMessage(text))
+        await self.chat_scroll.mount(UserMessage(text))
 
         augmented, attachments = _parse_context_mentions(text)
         self.context_panel.set_attachments(attachments)
@@ -675,10 +691,69 @@ class ChatApp(App):
         self._current_assistant = AssistantMessage()
         await self.chat_scroll.mount(self._current_assistant)
         self._set_status("Streaming…")
-        self._stream_task = self._stream_response(augmented)
+        self._stream_id += 1
+        self._stream_task = self._stream_response(augmented, self._stream_id)
+
+    @on(InputArea.Command)
+    async def _on_command(self, event: InputArea.Command) -> None:
+        if event.name == "clear":
+            await self._do_clear()
+        elif event.name == "stop":
+            self.action_interrupt()
+        elif event.name == "context":
+            self._show_context()
+        else:
+            self._set_status(f"Unknown command: /{event.name}")
+
+    async def _do_clear(self) -> None:
+        self._stream_id += 1
+        if self._stream_task is not None:
+            self._stream_task.cancel()
+            self._stream_task = None
+
+        server_cleared = False
+        try:
+            clear_url = self.url.replace("/chat", "/clear")
+            response = await self._client.post(
+                clear_url,
+                json={"message": "", "thread_id": self.thread_id},
+                timeout=3.0,
+            )
+            response.raise_for_status()
+            server_cleared = True
+        except Exception as exc:  # noqa: BLE001
+            self._set_status(f"Server clear failed ({exc}); UI cleared only.")
+
+        for child in list(self.chat_scroll.children):
+            await child.remove()
+        self.context_panel.set_attachments([])
+        self.context_panel.touched.clear()
+        self.context_panel.update_content()
+        self._current_assistant = None
+        await self.chat_scroll.mount(Static("Thread cleared.", markup=False))
+        self.chat_scroll.scroll_end(animate=False)
+        if server_cleared:
+            self._set_status("Ready.")
+
+    def _show_context(self) -> None:
+        lines: list[str] = ["Current context:"]
+        if self.context_panel.attachments:
+            lines.append("Attached now:")
+            for item in self.context_panel.attachments:
+                lines.append(f"  • {item}")
+        else:
+            lines.append("No files attached for the current prompt.")
+        if self.context_panel.touched:
+            lines.append("Touched this thread:")
+            for item in sorted(self.context_panel.touched):
+                lines.append(f"  • {item}")
+        else:
+            lines.append("No files touched by tools yet.")
+        self.chat_scroll.mount(Static("\n".join(lines), markup=False))
+        self.chat_scroll.scroll_end(animate=False)
 
     @work(exclusive=True)
-    async def _stream_response(self, message: str) -> None:
+    async def _stream_response(self, message: str, stream_id: int) -> None:
         payload = {"message": message, "thread_id": self.thread_id}
         try:
             async with self._client.stream("POST", self.url, json=payload) as response:
@@ -706,7 +781,9 @@ class ChatApp(App):
                             )
                     elif current_event == "message":
                         event = json.loads(data_part)
-                        self.call_next(self._handle_message_event, event)
+                        self.call_next(
+                            self._handle_message_event_with_id, stream_id, event
+                        )
                     elif current_event == "done":
                         self.call_next(self._set_status, "Ready.")
                     elif current_event == "error":
@@ -718,6 +795,13 @@ class ChatApp(App):
             self.call_next(self._set_status, f"Connection error: {exc}")
         except Exception as exc:  # noqa: BLE001
             self.call_next(self._set_status, f"Stream error: {exc}")
+
+    async def _handle_message_event_with_id(
+        self, stream_id: int, event: dict[str, Any]
+    ) -> None:
+        if stream_id != self._stream_id:
+            return
+        await self._handle_message_event(event)
 
     def _update_header(self, agent_name: str, thread_id: str) -> None:
         header = self.query_one("#header", Static)
