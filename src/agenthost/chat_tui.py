@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import subprocess
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.message import Message
 from textual.reactive import reactive
+from textual.screen import ModalScreen
 from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text
 from textual.widgets import (
@@ -172,6 +174,9 @@ class UserMessage(Static):
         width: 100%;
         padding: 0 2 1 2;
         text-style: bold;
+        background: $primary-darken-2;
+        color: $text;
+        border-left: outer $primary;
     }
     """
 
@@ -264,6 +269,73 @@ class ToolResultCard(Collapsible):
 # ---------------------------------------------------------------------------
 # Context panel
 # ---------------------------------------------------------------------------
+
+
+class ThreadPicker(ModalScreen[str | None]):
+    """Modal screen for selecting a previous conversation thread."""
+
+    CSS = """
+    ThreadPicker {
+        align: center middle;
+    }
+    ThreadPicker > Vertical {
+        width: 80;
+        height: auto;
+        max-height: 30;
+        border: thick $background 80%;
+        padding: 1 2;
+        background: $surface;
+    }
+    ThreadPicker Label {
+        width: 100%;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    ThreadPicker ListView {
+        width: 100%;
+        height: auto;
+        max-height: 20;
+        border: solid $primary;
+    }
+    ThreadPicker ListView > ListItem {
+        height: auto;
+        padding: 0 1;
+    }
+    ThreadPicker Button {
+        width: 100%;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, threads: list[dict[str, Any]], **kwargs: Any) -> None:
+        self.threads = threads
+        super().__init__(**kwargs)
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Select a thread to load:")
+            yield ListView(id="thread-list")
+            yield Button("Cancel", id="cancel", variant="error")
+
+    def on_mount(self) -> None:
+        list_view = self.query_one("#thread-list", ListView)
+        for i, thread in enumerate(self.threads, start=1):
+            preview = thread.get("latest_message_preview", "")
+            role = thread.get("latest_message_role", "")
+            ts = thread.get("latest_message_at", "")
+            label = f"{i}. {thread['thread_id'][:16]}… [{role}] {ts} — {preview}"
+            list_view.append(ListItem(Label(label)))
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        index = event.list_view.index
+        if 0 <= index < len(self.threads):
+            self.dismiss(self.threads[index]["thread_id"])
+        else:
+            self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
 
 
 class ContextPanel(Vertical):
@@ -642,7 +714,7 @@ class ChatApp(App):
     ) -> None:
         self.url = url
         self.agent_name = agent_name
-        self.thread_id = thread_id or "default"
+        self.thread_id = thread_id
         self._client = httpx.AsyncClient(timeout=600.0)
         self._current_assistant: AssistantMessage | None = None
         self._current_tool: ToolCallCard | None = None
@@ -651,8 +723,9 @@ class ChatApp(App):
         super().__init__()
 
     def compose(self) -> ComposeResult:
+        thread_display = self.thread_id or "<new>"
         yield Static(
-            f"agenthost chat — {self.agent_name} — thread: {self.thread_id}",
+            f"agenthost chat — {self.agent_name} — thread: {thread_display}",
             id="header",
         )
         with VerticalScroll(id="chat-scroll"):
@@ -698,6 +771,8 @@ class ChatApp(App):
     async def _on_command(self, event: InputArea.Command) -> None:
         if event.name == "clear":
             await self._do_clear()
+        elif event.name == "thread":
+            await self._do_thread()
         elif event.name == "stop":
             self.action_interrupt()
         elif event.name == "context":
@@ -730,10 +805,40 @@ class ChatApp(App):
         self.context_panel.touched.clear()
         self.context_panel.update_content()
         self._current_assistant = None
-        await self.chat_scroll.mount(Static("Thread cleared.", markup=False))
+
+        # Start a fresh thread.
+        self.thread_id = uuid.uuid4().hex
+        self._update_header(self.agent_name, self.thread_id)
+
+        await self.chat_scroll.mount(Static("Thread cleared. Started a new thread.", markup=False))
         self.chat_scroll.scroll_end(animate=False)
         if server_cleared:
             self._set_status("Ready.")
+
+    async def _do_thread(self) -> None:
+        """Show a thread picker and load the selected thread."""
+        try:
+            threads_url = self.url.replace("/chat", "/threads")
+            response = await self._client.get(threads_url, timeout=5.0)
+            response.raise_for_status()
+            threads = response.json().get("threads", [])
+        except Exception as exc:  # noqa: BLE001
+            self._set_status(f"Failed to load threads: {exc}")
+            return
+
+        if not threads:
+            self._set_status("No previous threads found.")
+            return
+
+        def on_thread_selected(selected_thread_id: str | None) -> None:
+            if selected_thread_id is None:
+                self._set_status("Thread selection cancelled.")
+                return
+            self.thread_id = selected_thread_id
+            self._update_header(self.agent_name, self.thread_id)
+            self._set_status(f"Loaded thread {selected_thread_id}.")
+
+        self.push_screen(ThreadPicker(threads), on_thread_selected)
 
     def _show_context(self) -> None:
         lines: list[str] = ["Current context:"]
@@ -754,7 +859,9 @@ class ChatApp(App):
 
     @work(exclusive=True)
     async def _stream_response(self, message: str, stream_id: int) -> None:
-        payload = {"message": message, "thread_id": self.thread_id}
+        payload: dict[str, object] = {"message": message}
+        if self.thread_id:
+            payload["thread_id"] = self.thread_id
         try:
             async with self._client.stream("POST", self.url, json=payload) as response:
                 response.raise_for_status()

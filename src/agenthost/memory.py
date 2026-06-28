@@ -187,3 +187,31 @@ class AgentMemory:
         with self._connect() as conn:
             conn.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
             conn.commit()
+
+    def list_threads(self) -> list[dict[str, Any]]:
+        """Return all thread IDs with a preview of their latest message."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT thread_id, role, content, created_at
+                FROM messages
+                WHERE id IN (
+                    SELECT MAX(id) FROM messages GROUP BY thread_id
+                )
+                ORDER BY created_at DESC
+                """
+            ).fetchall()
+
+        threads: list[dict[str, Any]] = []
+        for row in rows:
+            preview = row["content"] or f"[{row['role']}]"
+            preview = preview.replace("\n", " ")[:120]
+            threads.append(
+                {
+                    "thread_id": row["thread_id"],
+                    "latest_message_role": row["role"],
+                    "latest_message_preview": preview,
+                    "latest_message_at": row["created_at"],
+                }
+            )
+        return threads

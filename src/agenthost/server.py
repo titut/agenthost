@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import socket
+import uuid
 from contextlib import asynccontextmanager, closing
 from typing import AsyncIterator
 
@@ -24,7 +25,7 @@ DEFAULT_PORT_END = 9000
 
 class ChatRequest(BaseModel):
     message: str
-    thread_id: str | None = Field(default=None, description="Conversation thread ID; omitted uses the process default thread.")
+    thread_id: str | None = Field(default=None, description="Conversation thread ID; omitted starts a new thread.")
 
 
 class ChatResponse(BaseModel):
@@ -76,9 +77,15 @@ def build_app(agent: Agent) -> FastAPI:
         agent.memory.clear_thread(thread_id)
         return {"status": "cleared", "thread_id": thread_id}
 
+    @app.get("/threads")
+    async def threads() -> dict:
+        """List all conversation threads with a preview of the latest message."""
+        logger.info("Threads request for agent '%s'", agent.config.name)
+        return {"threads": agent.memory.list_threads()}
+
     @app.post("/chat")
     async def chat(request: ChatRequest) -> StreamingResponse:
-        thread_id = request.thread_id or DEFAULT_THREAD_ID
+        thread_id = request.thread_id or uuid.uuid4().hex
         logger.info(
             "Chat request for agent '%s' thread '%s'", agent.config.name, thread_id
         )
@@ -123,7 +130,6 @@ def serve(config: AgentConfig) -> None:
 
     logger.info("Starting agent '%s' from %s", config.name, config.path)
     agent = Agent(config)
-    agent.memory.clear_messages()
     app = build_app(agent)
 
     port = _resolve_port(config)

@@ -23,6 +23,10 @@ agents/*/memory/
 agents/*/output/
 agents/*/.backup
 
+# ── JOB AGENT ──────────
+agents/JOB_HUNTER
+JOBS.md
+
 # ── Runtime registry ────────────────────────────────────────────────
 .agenthost-registry.json
 agents.yaml

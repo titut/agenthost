@@ -104,7 +104,8 @@ TUI slash commands:
 
 | Command     | Description                                                        |
 |-------------|--------------------------------------------------------------------|
-| `/clear`    | Clear the current thread from the UI and server memory             |
+| `/clear`    | Delete the current thread and start a new one                      |
+| `/thread`   | List all saved threads and load the selected one                   |
 | `/stop`     | Halt an in-progress streaming response                             |
 | `/context`  | Show the current prompt attachments and files touched by tools     |
 
@@ -134,7 +135,7 @@ agenthost serve agents/RESEARCHER
 - Port auto-assigns from 8000 if not specified in `agent.yaml`
 - Registers the agent in the process registry
 - Prints the URL and model info on startup
-- Clears conversation history on each serve (fresh start)
+- Conversation history persists across restarts; a new chat without a `thread_id` starts a new thread
 
 ### `agenthost chat --agent <name>`
 
@@ -423,7 +424,7 @@ Messages are automatically trimmed to `max_memory_turns` (configurable in `agent
 
 The ORCHESTRATOR agent uses the KV store for plan persistence (`plan_save`/`plan_load`/`plan_delete`).
 
-On serve startup, the conversation history is cleared (fresh start).
+A chat request without a `thread_id` starts a new thread automatically, so previous conversation history is preserved while new conversations do not inherit old context.
 
 ---
 
