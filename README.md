@@ -75,6 +75,12 @@ Requires Python ≥ 3.10. See `pyproject.toml` for full dependency list.
 agenthost serve agents/RESEARCHER
 ```
 
+You can also serve by a registered alias (see [Agent Aliases](#agent-aliases)):
+
+```bash
+agenthost serve RESEARCHER
+```
+
 Ports are auto-assigned starting at `8000`. The CLI prints the URL on startup.
 
 ### Chat with an Agent
@@ -173,6 +179,26 @@ agenthost list
 ```
 
 Outputs a table of `Name`, `Host`, `Port`, `PID`, and `Path`. Stale entries (dead PIDs) are automatically pruned.
+
+### `agenthost agent list|add|remove`
+
+Manage registered agent aliases in `agents.yaml`. Aliases let you refer to agents by short names instead of full folder paths.
+
+```bash
+agenthost agent list                          # List registered aliases
+agenthost agent add RESEARCHER agents/RESEARCHER  # Register an alias
+agenthost agent remove RESEARCHER             # Remove an alias
+```
+
+The file `agents.yaml` at the project root maps aliases to agent folder paths:
+
+```yaml
+agents:
+  ORCHESTRATOR: /home/koroko/Workspace/agenthub/agents/ORCHESTRATOR
+  RESEARCHER: /home/koroko/Workspace/agenthub/agents/RESEARCHER
+```
+
+Aliases are resolved by `agenthost serve <alias>` and by the ORCHESTRATOR's lifecycle tools.
 
 ### `agenthost key list|add|edit`
 

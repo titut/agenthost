@@ -149,7 +149,13 @@ def _load_module(path: Path) -> ModuleType:
 
 
 def discover_tools(tools_dir: Path) -> tuple[list[dict[str, Any]], ToolRunner]:
-    """Discover tool functions from Python files in tools_dir."""
+    """Discover tool functions from Python files in tools_dir.
+
+    Only includes functions **defined** in each module (checked via
+    ``fn.__module__``), not imported references.  This prevents the same
+    shared helper (e.g. ``get_gmail_service`` imported from ``_gmail_base``
+    into every tool module) from being registered as a duplicate tool.
+    """
     functions: dict[str, Callable[..., Any]] = {}
     schemas: list[dict[str, Any]] = []
 
@@ -160,8 +166,12 @@ def discover_tools(tools_dir: Path) -> tuple[list[dict[str, Any]], ToolRunner]:
         if file.name.startswith("_"):
             continue
         module = _load_module(file)
+        module_name = module.__name__
         for name, obj in inspect.getmembers(module, inspect.isfunction):
             if name.startswith("_"):
+                continue
+            # Only accept functions defined in this module, not imported ones.
+            if getattr(obj, "__module__", None) != module_name:
                 continue
             functions[name] = obj
             schemas.append(_build_tool_schema(obj))
