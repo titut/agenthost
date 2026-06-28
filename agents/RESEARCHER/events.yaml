@@ -1,0 +1,9 @@
+timezone: "Asia/Bangkok"
+
+events:
+  - name: morning-tech-summary
+    schedule:
+      type: once
+      at: "2026-06-28T23:13:00"
+    enabled: true
+    prompt: "Summarize the top tech headlines from the last 24 hours."

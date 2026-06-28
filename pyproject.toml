@@ -13,6 +13,7 @@ dependencies = [
     "ddgs>=9.0",
     "pykeepass>=4.1.0",
     "textual>=0.52.0",
+    "apscheduler>=3.10.0",
 ]
 
 [project.scripts]

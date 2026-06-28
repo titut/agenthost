@@ -10,8 +10,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
 from agenthost.agent import Agent
 from agenthost.config import AgentConfig
+from agenthost.events import load_events, run_scheduled_event
 from agenthost.logger import setup_logging
 from agenthost.registry import register_agent, unregister_agent
 
@@ -51,10 +54,16 @@ def _resolve_port(config: AgentConfig) -> int:
     return _find_free_port(config.host)
 
 
-def build_app(agent: Agent) -> FastAPI:
+def build_app(agent: Agent, scheduler: AsyncIOScheduler | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if scheduler is not None:
+            scheduler.start()
+            logger.info("Scheduler started for agent '%s'", agent.config.name)
         yield
+        if scheduler is not None:
+            scheduler.shutdown()
+            logger.info("Scheduler stopped for agent '%s'", agent.config.name)
 
     app = FastAPI(title=f"Agent: {agent.config.name}", lifespan=lifespan)
 
@@ -82,6 +91,15 @@ def build_app(agent: Agent) -> FastAPI:
         """List all conversation threads with a preview of the latest message."""
         logger.info("Threads request for agent '%s'", agent.config.name)
         return {"threads": agent.memory.list_threads()}
+
+    @app.get("/history")
+    async def history(thread_id: str = DEFAULT_THREAD_ID) -> dict:
+        """Return the full message history for a thread."""
+        logger.info(
+            "History request for agent '%s' thread '%s'", agent.config.name, thread_id
+        )
+        messages = agent.memory.get_messages(thread_id)
+        return {"thread_id": thread_id, "messages": messages}
 
     @app.post("/chat")
     async def chat(request: ChatRequest) -> StreamingResponse:
@@ -130,7 +148,38 @@ def serve(config: AgentConfig) -> None:
 
     logger.info("Starting agent '%s' from %s", config.name, config.path)
     agent = Agent(config)
-    app = build_app(agent)
+
+    scheduler = AsyncIOScheduler()
+    events, file_timezone = load_events(config.path)
+    scheduled_count = 0
+    for event in events:
+        if not event.enabled:
+            logger.info("Skipping disabled event '%s'", event.name)
+            continue
+        try:
+            triggers = event.schedule.to_triggers(file_timezone)
+        except Exception as exc:
+            logger.error("Invalid schedule for event '%s': %s", event.name, exc)
+            continue
+        for trigger in triggers:
+            job_id = f"{config.name}-{event.name}-{scheduled_count}"
+            scheduler.add_job(
+                run_scheduled_event,
+                trigger=trigger,
+                args=(agent, event),
+                id=job_id,
+                replace_existing=True,
+            )
+            scheduled_count += 1
+    logger.info(
+        "Loaded %d enabled events (%d trigger jobs) for agent '%s' (timezone=%s)",
+        sum(1 for e in events if e.enabled),
+        scheduled_count,
+        config.name,
+        file_timezone or "local",
+    )
+
+    app = build_app(agent, scheduler)
 
     port = _resolve_port(config)
     register_agent(config.name, config.path, config.host, port)

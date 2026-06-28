@@ -105,7 +105,7 @@ TUI slash commands:
 | Command     | Description                                                        |
 |-------------|--------------------------------------------------------------------|
 | `/clear`    | Delete the current thread and start a new one                      |
-| `/thread`   | List all saved threads and load the selected one                   |
+| `/thread`   | List saved threads and load the selected one with full history     |
 | `/stop`     | Halt an in-progress streaming response                             |
 | `/context`  | Show the current prompt attachments and files touched by tools     |
 
@@ -425,6 +425,64 @@ Messages are automatically trimmed to `max_memory_turns` (configurable in `agent
 The ORCHESTRATOR agent uses the KV store for plan persistence (`plan_save`/`plan_load`/`plan_delete`).
 
 A chat request without a `thread_id` starts a new thread automatically, so previous conversation history is preserved while new conversations do not inherit old context.
+
+---
+
+## Scheduled Events
+
+Each agent can define time-based events in an `events.yaml` file inside its folder. When the agent is served, the scheduler starts automatically and sends the configured prompts to the agent on schedule.
+
+```yaml
+# agents/RESEARCHER/events.yaml
+timezone: "America/New_York"
+
+events:
+  - name: morning-summary
+    schedule:
+      type: weekdays
+      time: "09:00"
+    enabled: true
+    prompt: "Summarize the top tech headlines from the last 24 hours."
+
+  - name: midweek-deep-dives
+    schedule:
+      type: [monday, wednesday]
+      time: ["09:00", "23:00"]
+    enabled: true
+    prompt: "Pick one emerging technology and explain it in depth."
+
+  - name: hourly-check
+    schedule:
+      type: interval
+      every: 1
+      unit: hours
+    enabled: false
+    prompt: "Check if anything needs my attention."
+
+  - name: holiday-greeting
+    schedule:
+      type: once
+      at: "2026-12-25T09:00:00"
+    enabled: true
+    prompt: "Wish the user a happy holiday and suggest one thing to learn today."
+```
+
+### Schedule types
+
+| Type | Description | Required fields |
+|------|-------------|-----------------|
+| `daily` | Every day | `time` |
+| `weekdays` | Monday–Friday | `time` |
+| `weekends` | Saturday–Sunday | `time` |
+| `monday` … `sunday` | Specific day(s) | `time` |
+| `interval` | Repeating interval | `every`, `unit` |
+| `once` | One-time job | `at` |
+
+`type` and `time` can be strings or lists. The scheduler expands combinations: `type: [monday, wednesday]` with `time: ["09:00", "23:00"]` creates four trigger jobs.
+
+Interval `unit` can be `seconds`, `minutes`, `hours`, or `days`. One-time `at` values use ISO 8601 format.
+
+Set `timezone` at the top of the file to pin every event in the file to the same timezone. Timezones must be IANA names (e.g. `America/New_York`, `Europe/Paris`, `UTC`). This is especially useful if you travel — the schedule fires at the same local time regardless of where your machine is. If `timezone` is omitted, the system's local timezone is used.
 
 ---
 

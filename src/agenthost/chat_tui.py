@@ -816,7 +816,7 @@ class ChatApp(App):
             self._set_status("Ready.")
 
     async def _do_thread(self) -> None:
-        """Show a thread picker and load the selected thread."""
+        """Show a thread picker and load the selected thread with full history."""
         try:
             threads_url = self.url.replace("/chat", "/threads")
             response = await self._client.get(threads_url, timeout=5.0)
@@ -836,9 +836,52 @@ class ChatApp(App):
                 return
             self.thread_id = selected_thread_id
             self._update_header(self.agent_name, self.thread_id)
-            self._set_status(f"Loaded thread {selected_thread_id}.")
+            self._load_thread_history(selected_thread_id)
 
         self.push_screen(ThreadPicker(threads), on_thread_selected)
+
+    @work(exclusive=True)
+    async def _load_thread_history(self, thread_id: str) -> None:
+        """Fetch and render the full history for a thread."""
+        try:
+            history_url = self.url.replace("/chat", "/history")
+            response = await self._client.get(
+                history_url,
+                params={"thread_id": thread_id},
+                timeout=5.0,
+            )
+            response.raise_for_status()
+            messages = response.json().get("messages", [])
+        except Exception as exc:  # noqa: BLE001
+            self._set_status(f"Failed to load history: {exc}")
+            return
+
+        # Cancel any in-progress stream and clear the UI.
+        self._stream_id += 1
+        if self._stream_task is not None and not self._stream_task.done():
+            self._stream_task.cancel()
+        self._stream_task = None
+
+        for child in list(self.chat_scroll.children):
+            await child.remove()
+        self.context_panel.set_attachments([])
+        self.context_panel.touched.clear()
+        self.context_panel.update_content()
+        self._current_assistant = None
+
+        # Render the conversation history.
+        for msg in messages:
+            role = msg.get("role")
+            content = msg.get("content") or ""
+            if role == "user" and content:
+                await self.chat_scroll.mount(UserMessage(content))
+            elif role == "assistant" and content:
+                assistant = AssistantMessage()
+                await self.chat_scroll.mount(assistant)
+                assistant.content = content
+
+        self.chat_scroll.scroll_end(animate=False)
+        self._set_status(f"Loaded thread {thread_id}.")
 
     def _show_context(self) -> None:
         lines: list[str] = ["Current context:"]
