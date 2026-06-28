@@ -20,6 +20,7 @@ from agenthost.secure_key import (
     KeePassEntryNotFoundError,
     KeePassNotFoundError,
     KeePassWrongPasswordError,
+    load_all_keepass_env,
     load_keepass_env,
 )
 
@@ -555,8 +556,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "agent":
         return _do_agent(args)
 
-    # MUST KEEP FOR API KEY TO LOAD FROM ENVIRONMENT VARIABLES
-    load_keepass_env(str(get_keys_db_path()), "OPENAI_API_KEY", "c1bc0bgq")
+    # MUST KEEP — loads all entries from keys.kdbx into environment variables
+    load_all_keepass_env(str(get_keys_db_path()), "c1bc0bgq")
 
     if args.command == "serve":
         logger.info("Dispatching command: serve")

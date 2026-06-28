@@ -156,7 +156,7 @@ class KeePassDB:
 
 # ---------------------------------------------------------------------------
 # Legacy compatibility: load_keepass_env() keeps its exact signature so that
-# existing callers in cli.py and elsewhere continue to work unchanged.
+# existing callers elsewhere continue to work unchanged.
 # ---------------------------------------------------------------------------
 
 
@@ -176,3 +176,35 @@ def load_keepass_env(db_path: str, entry_path: str, master_password: str) -> Non
     secret_value = db.get_key(entry_path)
     os.environ[entry_path] = secret_value
     print(f"\u2705 Successfully loaded {entry_path} into environment.")
+
+
+def load_all_keepass_env(db_path: str | Path, master_password: str) -> None:
+    """Load every entry in the KeePass database into the process environment.
+
+    Each entry's title becomes the environment-variable name and its password
+    becomes the value. Skips entries with empty titles. Does not overwrite
+    variables that are already set.
+
+    Args:
+        db_path: Path to the .kdbx file.
+        master_password: The master password for the database.
+    """
+    db = KeePassDB(db_path, master_password)
+    entries = db._kp.entries
+    loaded = 0
+    skipped = 0
+    for entry in entries:
+        title = entry.title
+        if not title:
+            skipped += 1
+            continue
+        if title in os.environ:
+            skipped += 1
+            continue
+        os.environ[title] = entry.password
+        loaded += 1
+
+    print(
+        f"\u2705 Loaded {loaded} key(s) from KeePass into environment"
+        f"{' (' + str(skipped) + ' skipped)' if skipped else '.'}"
+    )
