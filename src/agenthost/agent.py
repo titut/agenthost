@@ -83,6 +83,14 @@ class Agent:
                         if tc.function and tc.function.arguments:
                             tool_calls[index]["function"]["arguments"] += tc.function.arguments
 
+                        # Preserve provider-specific fields (e.g. Gemini's
+                        # thought_signature) that the OpenAI SDK does not model.
+                        extra = getattr(tc, "model_extra", None) or {}
+                        for key, value in extra.items():
+                            if key not in ("id", "index", "type", "function") and value is not None:
+                                tool_calls[index][key] = value
+                                logger.debug("Preserved tool-call extra field: %s", key)
+
             if tool_calls:
                 # Persist assistant's tool call request.
                 self.memory.append_message(thread_id, {"role": "assistant", "tool_calls": tool_calls})
