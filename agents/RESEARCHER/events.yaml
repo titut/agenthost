@@ -1,10 +1,10 @@
-timezone: "Asia/Bangkok"
+#timezone: "Asia/Bangkok"
 
-events:
-  - name: tech-summary
-    schedule:
-      type: interval
-      every: 1
-      unit: minutes
-    enabled: true
-    prompt: "Summarize the top tech headlines from the last 24 hours."
+#events:
+#  - name: tech-summary
+#    schedule:
+#      type: interval
+#      every: 1
+#      unit: minutes
+#    enabled: true
+#    prompt: "Summarize the top tech headlines from the last 24 hours."

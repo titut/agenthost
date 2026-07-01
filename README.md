@@ -568,6 +568,22 @@ Running agents are tracked in `.agenthost-registry.json` at the project root:
 
 ---
 
+## WhatsApp Bridge (Personal QR Pairing)
+
+A WhatsApp bridge is included under `integrations/whatsapp/`. It uses [Baileys](https://github.com/WhiskeySockets/Baileys) to pair with your personal WhatsApp number via QR code — no Meta Business API, webhooks, or public HTTPS endpoint required.
+
+```bash
+cd integrations/whatsapp
+npm install
+cp .env.example .env
+# edit .env to point AGENT_CHAT_URL at your running agent
+npm run dev
+```
+
+On first run, scan the QR code with WhatsApp (**Settings → Linked Devices → Link a Device**). Incoming text messages are forwarded to the agent's `/chat` endpoint, and replies are sent back to the same WhatsApp chat.
+
+See `integrations/whatsapp/README.md` for details.
+
 ## Source Structure
 
 ```

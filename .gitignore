@@ -65,6 +65,11 @@ desktop.ini
 *.whl
 *.tar.gz
 
+# ── Node.js / WhatsApp bridge ───────────────────────────────────────
+node_modules/
+integrations/whatsapp/dist/
+integrations/whatsapp/auth_state/
+
 # ── Logs / runtime ──────────────────────────────────────────────────
 *.log
 *.pid
