@@ -65,7 +65,15 @@ class Agent:
 
                 if delta.tool_calls:
                     for tc in delta.tool_calls:
+                        # Some providers (e.g. Gemini) omit the index on tool-call
+                        # deltas. Default to the current/last tool call, or 0.
                         index = tc.index
+                        if index is None:
+                            index = len(tool_calls) - 1 if tool_calls else 0
+                            logger.warning(
+                                "Tool-call delta missing index; defaulting to %s",
+                                index,
+                            )
                         while len(tool_calls) <= index:
                             tool_calls.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
                         if tc.id:
