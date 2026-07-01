@@ -1,10 +1,11 @@
 """Core agent: loads config, tools, skills, memory, and runs the LLM loop."""
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, AsyncIterator
 
-from openai import AsyncOpenAI, BadRequestError
+from openai import AsyncOpenAI, BadRequestError, BadRequestError
 
 from agenthost.config import AgentConfig
 from agenthost.logger import setup_logging
@@ -42,7 +43,7 @@ class Agent:
         messages = self._build_messages(thread_id)
 
         attempt = 0
-        max_attempts = 2
+        max_attempts = 5
         while True:
             try:
                 stream = await self.client.chat.completions.create(
@@ -53,25 +54,34 @@ class Agent:
                     temperature=self.config.temperature,
                     stream=True,
                 )
-            except BadRequestError as exc:
-                error_message = str(exc).lower()
-                if (
-                    "role 'tool' must be a response" in error_message
-                    or "tool' must be a response to a preceeding message" in error_message
-                ) and attempt < max_attempts - 1:
-                    attempt += 1
-                    logger.warning(
-                        "LLM rejected tool-message ordering in thread '%s' (attempt %d/%d); repairing and retrying",
+            except Exception as exc:
+                attempt += 1
+                if attempt >= max_attempts:
+                    logger.error(
+                        "LLM request failed for thread '%s' after %d attempts: %s",
                         thread_id,
                         attempt,
-                        max_attempts,
+                        exc,
                     )
+                    raise
+
+                logger.warning(
+                    "LLM request failed for thread '%s' (attempt %d/%d): %s; repairing and retrying in 1s",
+                    thread_id,
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+                try:
                     removed = self.memory.repair_thread(thread_id)
                     if removed:
                         logger.warning("Repaired %d messages in thread '%s'", removed, thread_id)
-                    messages = self._build_messages(thread_id)
-                    continue
-                raise
+                except Exception as repair_err:
+                    logger.warning("Repair failed for thread '%s': %s", thread_id, repair_err)
+
+                messages = self._build_messages(thread_id)
+                await asyncio.sleep(1)
+                continue
 
             assistant_content = ""
             tool_calls: list[dict[str, Any]] = []
