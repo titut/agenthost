@@ -514,24 +514,35 @@ class InputArea(Horizontal):
         return None
 
     def _refresh_completions(self) -> None:
-        prefix = self._mention_prefix()
-        if prefix is None:
-            self._completions = []
+        try:
+            prefix = self._mention_prefix()
+            if prefix is None:
+                self._completions = []
+                self._completion_index = -1
+                self.completion_list.clear()
+                self.completion_list.remove_class("-visible")
+                return
+
+            candidates = [p for p in _collect_repo_files(prefix) if p.startswith(prefix)]
+            self._completions = candidates[:20]
             self._completion_index = -1
             self.completion_list.clear()
-            self.completion_list.remove_class("-visible")
-            return
-
-        candidates = [p for p in _collect_repo_files(prefix) if p.startswith(prefix)]
-        self._completions = candidates[:20]
-        self._completion_index = -1
-        self.completion_list.clear()
-        for candidate in self._completions:
-            self.completion_list.append(ListItem(Label(candidate)))
-        if self._completions:
-            self.completion_list.add_class("-visible")
-        else:
-            self.completion_list.remove_class("-visible")
+            self.completion_list.extend(
+                [ListItem(Label(candidate)) for candidate in self._completions]
+            )
+            if self._completions:
+                self.completion_list.add_class("-visible")
+            else:
+                self.completion_list.remove_class("-visible")
+        except Exception as exc:  # noqa: BLE001
+            # Fail silently; completions are a convenience, not a requirement.
+            self._completions = []
+            self._completion_index = -1
+            try:
+                self.completion_list.clear()
+                self.completion_list.remove_class("-visible")
+            except Exception:
+                pass
 
     def _accept_completion(self) -> None:
         if not self._completions or self._completion_index < 0:
