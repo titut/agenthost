@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncIterator
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 
 from agenthost.config import AgentConfig
 from agenthost.logger import setup_logging
@@ -41,15 +41,37 @@ class Agent:
         self.memory.append_message(thread_id, {"role": "user", "content": user_message})
         messages = self._build_messages(thread_id)
 
+        attempt = 0
+        max_attempts = 2
         while True:
-            stream = await self.client.chat.completions.create(
-                model=self.config.model,
-                messages=messages,
-                tools=self.tool_schemas or None,
-                tool_choice="auto" if self.tool_schemas else None,
-                temperature=self.config.temperature,
-                stream=True,
-            )
+            try:
+                stream = await self.client.chat.completions.create(
+                    model=self.config.model,
+                    messages=messages,
+                    tools=self.tool_schemas or None,
+                    tool_choice="auto" if self.tool_schemas else None,
+                    temperature=self.config.temperature,
+                    stream=True,
+                )
+            except BadRequestError as exc:
+                error_message = str(exc).lower()
+                if (
+                    "role 'tool' must be a response" in error_message
+                    or "tool' must be a response to a preceeding message" in error_message
+                ) and attempt < max_attempts - 1:
+                    attempt += 1
+                    logger.warning(
+                        "LLM rejected tool-message ordering in thread '%s' (attempt %d/%d); repairing and retrying",
+                        thread_id,
+                        attempt,
+                        max_attempts,
+                    )
+                    removed = self.memory.repair_thread(thread_id)
+                    if removed:
+                        logger.warning("Repaired %d messages in thread '%s'", removed, thread_id)
+                    messages = self._build_messages(thread_id)
+                    continue
+                raise
 
             assistant_content = ""
             tool_calls: list[dict[str, Any]] = []

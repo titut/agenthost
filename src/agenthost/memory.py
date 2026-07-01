@@ -77,11 +77,14 @@ class AgentMemory:
         return messages
 
     def repair_thread(self, thread_id: str) -> int:
-        """Remove assistant 'tool_calls' messages with no matching tool responses.
+        """Repair a conversation thread so it can be sent to the LLM.
 
-        This can happen if a tool hung or crashed after the assistant message was
-        persisted. OpenAI rejects conversations with unanswered tool_calls.
-        Returns the number of dangling assistant messages removed.
+        Removes:
+        - Assistant messages with tool_calls that have no matching tool responses.
+        - Tool messages without a preceding assistant message that declared the
+          matching tool_call.
+
+        Returns the number of messages removed.
         """
         with self._connect() as conn:
             rows = conn.execute(
@@ -90,7 +93,9 @@ class AgentMemory:
                 (thread_id,),
             ).fetchall()
 
-        ids_to_delete: list[int] = []
+        ids_to_delete: set[int] = set()
+
+        # Pass 1: remove assistant tool_calls without matching tool responses.
         i = 0
         while i < len(rows):
             row = rows[i]
@@ -111,8 +116,27 @@ class AgentMemory:
                 j += 1
 
             if not expected_ids <= found_ids:
-                ids_to_delete.append(row["id"])
+                ids_to_delete.add(row["id"])
+                # Also discard any tool responses that immediately followed this
+                # dangling assistant message, since they no longer have a caller.
+                for k in range(i + 1, j):
+                    ids_to_delete.add(rows[k]["id"])
             i = j
+
+        # Pass 2: remove orphaned tool messages whose tool_call_id is not declared
+        # by any preceding assistant message.
+        declared_tool_call_ids: set[str] = set()
+        for row in rows:
+            if row["id"] in ids_to_delete:
+                continue
+            if row["role"] == "assistant" and row["tool_calls"]:
+                tool_calls = json.loads(row["tool_calls"])
+                for tc in tool_calls:
+                    if tc.get("id"):
+                        declared_tool_call_ids.add(tc["id"])
+            elif row["role"] == "tool":
+                if row["tool_call_id"] not in declared_tool_call_ids:
+                    ids_to_delete.add(row["id"])
 
         if ids_to_delete:
             with self._connect() as conn:
