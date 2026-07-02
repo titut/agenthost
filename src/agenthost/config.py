@@ -86,9 +86,12 @@ class AgentConfig:
             config.update(loaded)
 
         name = config.pop("name", p.name)
+        # The 'extra' block in agent.yaml is merged into the extra dict.
+        explicit_extra = config.pop("extra", None) or {}
         extra = {k: v for k, v in config.items() if k not in {
             "model", "host", "port", "temperature", "max_memory_turns", "base_url"
         }}
+        extra.update(explicit_extra)
 
         # Port is now optional in config; keep backward compat with explicit values.
         port_value = config.get("port")

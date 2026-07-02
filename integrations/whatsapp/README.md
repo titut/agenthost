@@ -29,19 +29,7 @@ Copy the example environment file and edit it:
 cp .env.example .env
 ```
 
-```env
-# URL of the running agent's chat endpoint
-AGENT_CHAT_URL=http://127.0.0.1:8000/chat
-
-# Optional: shown in logs
-AGENT_NAME=RESEARCHER
-
-# Optional: log verbosity
-#   info    - normal flow (default)
-#   debug   - verbose bridge logs (recommended for troubleshooting)
-#   trace   - debug + very noisy Baileys internal logs
-LOG_LEVEL=info
-```
+See `.env.example` for all available options.
 
 ## Run
 
@@ -88,10 +76,33 @@ If you send a new message while the agent is still responding to your previous o
 /system agent is busy, wait for response before sending another message
 ```
 
+## Outbound WhatsApp messages (scheduled events)
+
+The bridge can also push messages to WhatsApp without an incoming message. Set:
+
+```env
+WHATSAPP_TARGET_JID=1234567890@s.whatsapp.net
+BRIDGE_HTTP_PORT=9001
+```
+
+The bridge starts a small HTTP server at `http://127.0.0.1:9001/send`. The agent can call the built-in `send_whatsapp_message(text)` tool (enabled via `agent.yaml` `builtin_tools: [whatsapp]`) to POST messages to that endpoint.
+
+This is useful for scheduled events: the event prompt tells the agent to run a task and then call `send_whatsapp_message` with the result.
+
+In the agent's `agent.yaml`:
+
+```yaml
+extra:
+  builtin_tools: [events, whatsapp]
+  whatsapp_bridge_url: http://127.0.0.1:9001/send
+```
+
+The agent uses the unified `event_tool(action="add", action_name="...", ...)` tool to manage events.
+
 ## Notes
 
 - Only direct (1:1) text messages are handled. Group messages, status broadcasts, and media messages are ignored.
-- The sender's WhatsApp JID is hashed with SHA-256 to create the agent `thread_id`, so conversation history persists across restarts.
+- The sender's WhatsApp JID is used directly as the agent `thread_id`, so conversation history persists across restarts.
 - If you log out from WhatsApp's Linked Devices, delete `./auth_state` and scan the QR code again.
 
 ## Production / VPC

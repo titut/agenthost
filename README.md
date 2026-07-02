@@ -332,6 +332,31 @@ Each agent can also be used independently. The pipeline is a convention, not a c
 
 ---
 
+## Built-in Tools
+
+Every agent automatically gets these tools, regardless of its own `tools/` folder:
+
+| Tool | Purpose |
+|------|---------|
+| `event_tool(action, action_name, ...)` | CRUD operations for scheduled events |
+| `get_current_datetime()` | Return the current date and time |
+| `send_whatsapp_message(text)` | Push a message to WhatsApp via the bridge |
+
+Built-in tools are **opt-in** per agent. Enable them in `agent.yaml` using group names or individual tool names:
+
+```yaml
+extra:
+  builtin_tools: [events, whatsapp]
+
+# or just the ones you need:
+extra:
+  builtin_tools: [add_event, send_whatsapp_message]
+```
+
+Changes to events are written back to the agent's `events.yaml` and the live scheduler is reloaded automatically.
+
+---
+
 ## Writing Custom Tools
 
 Drop a Python file in an agent's `tools/` directory. Any top-level function with a docstring (that does not start with `_`) becomes a tool automatically:
@@ -583,6 +608,26 @@ npm run dev
 On first run, scan the QR code with WhatsApp (**Settings → Linked Devices → Link a Device**). Incoming text messages are forwarded to the agent's `/chat` endpoint, and replies are sent back to the same WhatsApp chat.
 
 See `integrations/whatsapp/README.md` for details.
+
+### Scheduled Events + WhatsApp
+
+To push scheduled event results to WhatsApp, enable both built-in tool packs and configure the bridge:
+
+```yaml
+# agent.yaml
+extra:
+  builtin_tools: [events, whatsapp]
+  event_thread_id: "1234567890@s.whatsapp.net"
+  whatsapp_bridge_url: http://127.0.0.1:9001/send
+```
+
+The `event_thread_id` should match the bridge's `WHATSAPP_TARGET_JID`. The agent uses the raw JID as the conversation thread ID.
+
+Then the agent can create an event whose prompt ends with something like:
+
+> "...and send the summary to WhatsApp with send_whatsapp_message."
+
+The `send_whatsapp_message(text)` tool POSTs to the WhatsApp bridge's `/send` endpoint, which pushes the message to the configured `WHATSAPP_TARGET_JID`.
 
 ## Source Structure
 

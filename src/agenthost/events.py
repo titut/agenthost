@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from zoneinfo import ZoneInfo
 
 import yaml
@@ -18,8 +18,10 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from pydantic import BaseModel, field_validator, model_validator
 
-from agenthost.agent import Agent
 from agenthost.logger import setup_logging
+
+if TYPE_CHECKING:
+    from agenthost.agent import Agent
 
 
 logger = setup_logging("agenthost.events")
@@ -218,14 +220,16 @@ def load_events(agent_path: str | Path) -> tuple[list[ScheduledEvent], str | Non
     return config.events, config.timezone
 
 
-async def run_scheduled_event(agent: Agent, event: ScheduledEvent) -> None:
+async def run_scheduled_event(agent: "Agent", event: ScheduledEvent) -> None:
     """Execute a scheduled event by sending its prompt to the agent."""
     logger.info(
         "Running scheduled event '%s' for agent '%s'",
         event.name,
         agent.config.name,
     )
-    thread_id = f"scheduled:{event.name}"
+    # Allow events to run in the same thread as an ongoing chat (e.g. WhatsApp)
+    # by configuring event_thread_id in agent.yaml extra fields.
+    thread_id = agent.config.extra.get("event_thread_id") or f"scheduled:{event.name}"
     response_parts: list[str] = []
 
     try:

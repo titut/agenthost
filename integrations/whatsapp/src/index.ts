@@ -1,6 +1,6 @@
 import 'dotenv/config';
-import crypto from 'crypto';
 import fs from 'fs/promises';
+import http from 'http';
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -20,6 +20,8 @@ const RESPOND_TO_FROM_ME = (process.env.RESPOND_TO_FROM_ME ?? 'false').toLowerCa
 const AI_PREFIX = process.env.AI_PREFIX ?? '/ai';
 const SYSTEM_PREFIX = process.env.SYSTEM_PREFIX ?? '/system';
 const BUSY_MESSAGE = process.env.BUSY_MESSAGE ?? 'agent is busy, wait for response before sending another message';
+const WHATSAPP_TARGET_JID = process.env.WHATSAPP_TARGET_JID;
+const BRIDGE_HTTP_PORT = parseInt(process.env.BRIDGE_HTTP_PORT ?? '9001', 10);
 
 // Track threads that currently have an in-flight agent request.
 const busyThreads = new Set<string>();
@@ -52,10 +54,6 @@ function mask(s: string | undefined): string {
   if (!s) return '<not set>';
   if (s.length <= 8) return '*'.repeat(s.length);
   return `${s.slice(0, 4)}...${s.slice(-4)}`;
-}
-
-function hashJid(jid: string): string {
-  return crypto.createHash('sha256').update(jid).digest('hex');
 }
 
 async function ensureDir(dir: string): Promise<void> {
@@ -246,7 +244,7 @@ async function handleIncomingMessage(sock: WASocket, msg: WAMessage): Promise<vo
     }
   }
 
-  const threadId = hashJid(remoteJid);
+  const threadId = remoteJid;
   log('info', `[${AGENT_NAME}] ${remoteJid} -> thread_id=${threadId}: ${rawText.slice(0, 80)}`);
 
   if (busyThreads.has(threadId)) {
@@ -283,6 +281,49 @@ async function handleIncomingMessage(sock: WASocket, msg: WAMessage): Promise<vo
   }
 }
 
+function startOutboundServer(sock: WASocket): void {
+  if (!WHATSAPP_TARGET_JID) {
+    log('info', 'WHATSAPP_TARGET_JID not set; outbound /send endpoint disabled');
+    return;
+  }
+
+  const server = http.createServer(async (req, res) => {
+    if (req.method !== 'POST' || req.url !== '/send') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not found' }));
+      return;
+    }
+
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const data = JSON.parse(body);
+        const text = data.text;
+        if (!text || typeof text !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'missing text' }));
+          return;
+        }
+
+        const taggedText = `${AI_PREFIX} ${text}`;
+        log('info', `Outbound /send: ${taggedText.slice(0, 80)}`);
+        await sock.sendMessage(WHATSAPP_TARGET_JID, { text: taggedText });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (err) {
+        log('error', 'Outbound /send failed:', err);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    });
+  });
+
+  server.listen(BRIDGE_HTTP_PORT, () => {
+    log('info', `Outbound server listening on http://127.0.0.1:${BRIDGE_HTTP_PORT}/send`);
+  });
+}
+
 async function start(): Promise<void> {
   log('info', '=== agenthost WhatsApp bridge starting ===');
   log('info', `AGENT_CHAT_URL=${AGENT_CHAT_URL}`);
@@ -293,6 +334,8 @@ async function start(): Promise<void> {
   log('info', `RESPOND_TO_FROM_ME=${RESPOND_TO_FROM_ME}`);
   log('info', `AI_PREFIX=${AI_PREFIX}`);
   log('info', `SYSTEM_PREFIX=${SYSTEM_PREFIX}`);
+  log('info', `WHATSAPP_TARGET_JID=${WHATSAPP_TARGET_JID ?? '<not set>'}`);
+  log('info', `BRIDGE_HTTP_PORT=${BRIDGE_HTTP_PORT}`);
 
   await ensureDir(AUTH_STATE_DIR);
 
@@ -336,6 +379,8 @@ async function start(): Promise<void> {
     version,
   });
   log('debug', 'WASocket created');
+
+  startOutboundServer(sock);
 
   sock.ev.on('connection.update', (update) => {
     log('debug', 'connection.update:', JSON.stringify(update, null, 2));

@@ -148,32 +148,42 @@ def _load_module(path: Path) -> ModuleType:
     return module
 
 
-def discover_tools(tools_dir: Path) -> tuple[list[dict[str, Any]], ToolRunner]:
+def discover_tools(
+    tools_dir: Path,
+    builtin_functions: dict[str, Callable[..., Any]] | None = None,
+) -> tuple[list[dict[str, Any]], ToolRunner]:
     """Discover tool functions from Python files in tools_dir.
 
     Only includes functions **defined** in each module (checked via
     ``fn.__module__``), not imported references.  This prevents the same
     shared helper (e.g. ``get_gmail_service`` imported from ``_gmail_base``
     into every tool module) from being registered as a duplicate tool.
+
+    ``builtin_functions`` are merged in after discovery. Agent-defined tools
+    with the same name take precedence over built-ins.
     """
     functions: dict[str, Callable[..., Any]] = {}
     schemas: list[dict[str, Any]] = []
 
-    if not tools_dir.exists():
-        return schemas, InProcessToolRunner(functions)
+    if tools_dir.exists():
+        for file in sorted(tools_dir.glob("*.py")):
+            if file.name.startswith("_"):
+                continue
+            module = _load_module(file)
+            module_name = module.__name__
+            for name, obj in inspect.getmembers(module, inspect.isfunction):
+                if name.startswith("_"):
+                    continue
+                # Only accept functions defined in this module, not imported ones.
+                if getattr(obj, "__module__", None) != module_name:
+                    continue
+                functions[name] = obj
+                schemas.append(_build_tool_schema(obj))
 
-    for file in sorted(tools_dir.glob("*.py")):
-        if file.name.startswith("_"):
-            continue
-        module = _load_module(file)
-        module_name = module.__name__
-        for name, obj in inspect.getmembers(module, inspect.isfunction):
-            if name.startswith("_"):
-                continue
-            # Only accept functions defined in this module, not imported ones.
-            if getattr(obj, "__module__", None) != module_name:
-                continue
-            functions[name] = obj
-            schemas.append(_build_tool_schema(obj))
+    if builtin_functions:
+        for name, fn in builtin_functions.items():
+            if name not in functions:
+                functions[name] = fn
+                schemas.append(_build_tool_schema(fn))
 
     return schemas, InProcessToolRunner(functions)

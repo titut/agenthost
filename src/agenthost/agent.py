@@ -7,6 +7,7 @@ from typing import Any, AsyncIterator
 
 from openai import AsyncOpenAI, BadRequestError, BadRequestError
 
+from agenthost.builtin_tools import build_builtin_tools_prompt, make_builtin_tools
 from agenthost.config import AgentConfig
 from agenthost.logger import setup_logging
 from agenthost.memory import AgentMemory
@@ -17,7 +18,12 @@ logger = setup_logging("agenthost.agent")
 
 
 class Agent:
-    def __init__(self, config: AgentConfig, client: AsyncOpenAI | None = None):
+    def __init__(
+        self,
+        config: AgentConfig,
+        client: AsyncOpenAI | None = None,
+        scheduler: Any | None = None,
+    ):
         self.config = config
         if client is not None:
             self.client = client
@@ -27,7 +33,9 @@ class Agent:
                 kwargs["base_url"] = config.base_url
             self.client = AsyncOpenAI(**kwargs)
         self.memory = AgentMemory(config)
-        self.tool_schemas, self.tool_runner = discover_tools(config.tools_dir)
+        builtins = make_builtin_tools(config, scheduler, agent_provider=lambda: self)
+        self.tool_schemas, self.tool_runner = discover_tools(config.tools_dir, builtins)
+        self.system_prompt = config.system_prompt + build_builtin_tools_prompt(config)
 
     async def chat(self, thread_id: str, user_message: str) -> AsyncIterator[str]:
         logger.info(
@@ -181,6 +189,6 @@ class Agent:
             break
 
     def _build_messages(self, thread_id: str) -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = [{"role": "system", "content": self.config.system_prompt}]
+        messages: list[dict[str, Any]] = [{"role": "system", "content": self.system_prompt}]
         messages.extend(self.memory.get_messages(thread_id))
         return messages

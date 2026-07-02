@@ -147,9 +147,13 @@ def serve(config: AgentConfig) -> None:
     import uvicorn
 
     logger.info("Starting agent '%s' from %s", config.name, config.path)
-    agent = Agent(config)
 
+    # Create the scheduler before the agent so built-in tools can manage it.
     scheduler = AsyncIOScheduler()
+
+    agent = Agent(config, scheduler=scheduler)
+
+    # Load events and schedule jobs now that the agent exists.
     events, file_timezone = load_events(config.path)
     scheduled_count = 0
     for event in events:
