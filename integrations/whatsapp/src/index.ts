@@ -2,10 +2,13 @@ import 'dotenv/config';
 import fs from 'fs/promises';
 import http from 'http';
 import makeWASocket, {
+  areJidsSameUser,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  jidNormalizedUser,
   useMultiFileAuthState,
   WASocket,
+  type Contact,
   type WAMessage,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
@@ -15,13 +18,11 @@ const AGENT_CHAT_URL = process.env.AGENT_CHAT_URL ?? 'http://127.0.0.1:8000/chat
 const AGENT_NAME = process.env.AGENT_NAME ?? 'agent';
 const AUTH_STATE_DIR = process.env.AUTH_STATE_DIR ?? './auth_state';
 const LOG_LEVEL = (process.env.LOG_LEVEL ?? 'info').toLowerCase();
-const RESPOND_TO_OTHERS = (process.env.RESPOND_TO_OTHERS ?? 'true').toLowerCase() === 'true';
-const RESPOND_TO_FROM_ME = (process.env.RESPOND_TO_FROM_ME ?? 'false').toLowerCase() === 'true';
+const RESPOND_TO_OTHERS = (process.env.RESPOND_TO_OTHERS ?? 'false').toLowerCase() === 'true';
+const RESPOND_TO_FROM_ME = (process.env.RESPOND_TO_FROM_ME ?? 'true').toLowerCase() === 'true';
 const AI_PREFIX = process.env.AI_PREFIX ?? '/ai';
 const SYSTEM_PREFIX = process.env.SYSTEM_PREFIX ?? '/system';
 const BUSY_MESSAGE = process.env.BUSY_MESSAGE ?? 'agent is busy, wait for response before sending another message';
-const WHATSAPP_TARGET_JID = process.env.WHATSAPP_TARGET_JID;
-const WHATSAPP_SELF_JID = process.env.WHATSAPP_SELF_JID;
 const BRIDGE_HTTP_PORT = parseInt(process.env.BRIDGE_HTTP_PORT ?? '9001', 10);
 
 // Track threads that currently have an in-flight agent request.
@@ -61,6 +62,39 @@ async function ensureDir(dir: string): Promise<void> {
   log('debug', `Ensuring directory exists: ${dir}`);
   await fs.mkdir(dir, { recursive: true });
   log('debug', `Directory ready: ${dir}`);
+}
+
+/** Derive stable identifiers for the logged-in account from Baileys creds. */
+function getSelfInfo(me: Contact | undefined) {
+  if (!me) {
+    return { phoneJid: undefined, lid: undefined, phone: undefined, selfChatJid: undefined };
+  }
+
+  // me.id is usually the phone JID with a device suffix, e.g. 6580835862:2@s.whatsapp.net
+  const normalizedPhoneJid = jidNormalizedUser(me.id);
+  const lid = me.lid ? jidNormalizedUser(me.lid) : undefined;
+
+  // For self-chat we prefer the LID (WhatsApp's privacy ID for messaging yourself),
+  // falling back to the normalized phone JID if no LID is available.
+  const selfChatJid = lid || normalizedPhoneJid;
+
+  // The bare phone number, e.g. 6580835862, used as a stable thread_id.
+  const phone = normalizedPhoneJid.split('@')[0] || undefined;
+
+  return { phoneJid: normalizedPhoneJid, lid, phone, selfChatJid };
+}
+
+/** Check whether a message is the user messaging themself. */
+function isSelfChat(msg: WAMessage, me: Contact | undefined): boolean {
+  if (!msg.key.fromMe || !me) return false;
+  const remoteJid = msg.key.remoteJid;
+  if (!remoteJid) return false;
+
+  const self = getSelfInfo(me);
+  // Self-chat can appear as either the account's LID or the phone JID.
+  if (self.lid && jidNormalizedUser(remoteJid) === self.lid) return true;
+  if (self.phoneJid && areJidsSameUser(remoteJid, self.phoneJid)) return true;
+  return false;
 }
 
 async function fetchAgentReply(threadId: string, message: string): Promise<string> {
@@ -197,7 +231,7 @@ async function sendSystemMessage(sock: WASocket, jid: string, text: string): Pro
 
 const IGNORED_STATUSES = new Set(['DELIVERY_ACK', 'SERVER_ACK', 'READ', 'PLAYED']);
 
-async function handleIncomingMessage(sock: WASocket, msg: WAMessage): Promise<void> {
+async function handleIncomingMessage(sock: WASocket, msg: WAMessage, me: Contact | undefined): Promise<void> {
   log('debug', 'Received raw message:', JSON.stringify(msg, null, 2));
 
   const key = msg.key;
@@ -247,11 +281,9 @@ async function handleIncomingMessage(sock: WASocket, msg: WAMessage): Promise<vo
       return;
     }
 
-    // Only respond to messages the user sent to themselves.
-    // WhatsApp self-chat uses a privacy LID that differs from the real JID,
-    // so we rely on WHATSAPP_SELF_JID env var for an exact match.
-    if (WHATSAPP_SELF_JID && remoteJid !== WHATSAPP_SELF_JID) {
-      log('debug', `Ignoring message from self to another contact (to=${remoteJid}, self=${WHATSAPP_SELF_JID})`);
+    // "From me" means self-chat only: the user messaging themself.
+    if (!isSelfChat(msg, me)) {
+      log('debug', `Ignoring message from self to another contact (to=${remoteJid})`);
       return;
     }
   } else {
@@ -261,12 +293,17 @@ async function handleIncomingMessage(sock: WASocket, msg: WAMessage): Promise<vo
     }
   }
 
-  const threadId = remoteJid;
+  // Use a stable thread_id. For self-chat this is the bare phone number so memory
+  // persists even if WhatsApp changes the LID. For others, use the remote JID.
+  const self = getSelfInfo(me);
+  const threadId = self.phone ?? remoteJid;
+  const replyTarget = remoteJid;
+
   log('info', `[${AGENT_NAME}] ${remoteJid} -> thread_id=${threadId}: ${rawText.slice(0, 80)}`);
 
   if (busyThreads.has(threadId)) {
     log('warn', `Thread ${threadId} is busy; rejecting new message`);
-    await sendSystemMessage(sock, remoteJid, BUSY_MESSAGE);
+    await sendSystemMessage(sock, replyTarget, BUSY_MESSAGE);
     return;
   }
 
@@ -277,7 +314,7 @@ async function handleIncomingMessage(sock: WASocket, msg: WAMessage): Promise<vo
     const reply = await fetchAgentReply(threadId, rawText);
     if (!reply.trim()) {
       log('warn', 'Agent returned empty reply; nothing to send');
-      await sendSystemMessage(sock, remoteJid, 'agent returned an empty response');
+      await sendSystemMessage(sock, replyTarget, 'agent returned an empty response');
       return;
     }
 
@@ -286,21 +323,24 @@ async function handleIncomingMessage(sock: WASocket, msg: WAMessage): Promise<vo
 
     const sendStart = Date.now();
     const aiMessage = `${AI_PREFIX} ${reply}`;
-    const result = await sock.sendMessage(remoteJid, { text: aiMessage });
+    const result = await sock.sendMessage(replyTarget, { text: aiMessage });
     log('debug', `WhatsApp send took ${Date.now() - sendStart}ms, result:`, JSON.stringify(result, null, 2));
   } catch (err) {
     const errorText = err instanceof Error ? err.message : String(err);
     log('error', 'Failed to get or send reply:', err);
-    await sendSystemMessage(sock, remoteJid, `error: ${errorText}`);
+    await sendSystemMessage(sock, replyTarget, `error: ${errorText}`);
   } finally {
     busyThreads.delete(threadId);
     log('debug', `Thread ${threadId} no longer busy`);
   }
 }
 
-function startOutboundServer(sock: WASocket): void {
-  if (!WHATSAPP_TARGET_JID) {
-    log('info', 'WHATSAPP_TARGET_JID not set; outbound /send endpoint disabled');
+function startOutboundServer(sock: WASocket, me: Contact | undefined): void {
+  const self = getSelfInfo(me);
+  const defaultTarget = self.selfChatJid;
+
+  if (!defaultTarget) {
+    log('warn', 'No self-chat JID available yet; outbound /send endpoint disabled');
     return;
   }
 
@@ -323,11 +363,12 @@ function startOutboundServer(sock: WASocket): void {
           return;
         }
 
+        const target = data.to && typeof data.to === 'string' ? data.to : defaultTarget;
         const taggedText = `${AI_PREFIX} ${text}`;
-        log('info', `Outbound /send: ${taggedText.slice(0, 80)}`);
-        await sock.sendMessage(WHATSAPP_TARGET_JID, { text: taggedText });
+        log('info', `Outbound /send to ${target}: ${taggedText.slice(0, 80)}`);
+        await sock.sendMessage(target, { text: taggedText });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
+        res.end(JSON.stringify({ ok: true, target }));
       } catch (err) {
         log('error', 'Outbound /send failed:', err);
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -337,7 +378,7 @@ function startOutboundServer(sock: WASocket): void {
   });
 
   server.listen(BRIDGE_HTTP_PORT, () => {
-    log('info', `Outbound server listening on http://127.0.0.1:${BRIDGE_HTTP_PORT}/send`);
+    log('info', `Outbound server listening on http://127.0.0.1:${BRIDGE_HTTP_PORT}/send (default target: ${defaultTarget})`);
   });
 }
 
@@ -351,8 +392,6 @@ async function start(): Promise<void> {
   log('info', `RESPOND_TO_FROM_ME=${RESPOND_TO_FROM_ME}`);
   log('info', `AI_PREFIX=${AI_PREFIX}`);
   log('info', `SYSTEM_PREFIX=${SYSTEM_PREFIX}`);
-  log('info', `WHATSAPP_TARGET_JID=${WHATSAPP_TARGET_JID ?? '<not set>'}`);
-  log('info', `WHATSAPP_SELF_JID=${WHATSAPP_SELF_JID ?? '<not set>'}`);
   log('info', `BRIDGE_HTTP_PORT=${BRIDGE_HTTP_PORT}`);
 
   await ensureDir(AUTH_STATE_DIR);
@@ -378,7 +417,8 @@ async function start(): Promise<void> {
       throw err;
     }
   } else {
-    log('debug', `Existing session found for ${state.creds.me.id}`);
+    const self = getSelfInfo(state.creds.me);
+    log('info', `Existing session found for ${mask(self.phoneJid)} (self-chat JID: ${self.selfChatJid})`);
   }
 
   // Baileys internal logger: trace only when explicitly requested, otherwise silent.
@@ -398,7 +438,8 @@ async function start(): Promise<void> {
   });
   log('debug', 'WASocket created');
 
-  startOutboundServer(sock);
+  const me = state.creds.me;
+  startOutboundServer(sock, me);
 
   sock.ev.on('connection.update', (update) => {
     log('debug', 'connection.update:', JSON.stringify(update, null, 2));
@@ -445,7 +486,7 @@ async function start(): Promise<void> {
   sock.ev.on('messages.upsert', async (m) => {
     log('debug', `messages.upsert: ${m.messages.length} message(s), type=${m.type}`);
     for (const msg of m.messages) {
-      await handleIncomingMessage(sock, msg);
+      await handleIncomingMessage(sock, msg, me);
     }
   });
 }

@@ -58,6 +58,31 @@ Messages from anyone else are ignored.
 
 To find your username, message the bot `/start` or `/id`.
 
+## Proxy support
+
+Some VPS providers have poor routing to `api.telegram.org`, causing SSL handshake timeouts or very slow connections. If `curl -I https://api.telegram.org` hangs on your server, set a proxy:
+
+```env
+TELEGRAM_PROXY=http://proxy.example.com:8080
+```
+
+SOCKS5 is also supported if you install `httpx[socks]`:
+
+```bash
+pip install "httpx[socks]"
+```
+
+```env
+TELEGRAM_PROXY=socks5://user:pass@proxy.example.com:1080
+```
+
+You can also tune the Telegram API timeouts:
+
+```env
+TELEGRAM_CONNECT_TIMEOUT=30
+TELEGRAM_READ_TIMEOUT=60
+```
+
 ## Notes
 
 - The bridge uses long polling. It will keep running until you stop it.

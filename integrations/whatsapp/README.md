@@ -8,8 +8,10 @@ This lets you chat with a served agent from your personal WhatsApp number. No Me
 
 1. This Node.js service pairs with your personal WhatsApp via QR code (Linked Devices).
 2. It listens for incoming WhatsApp messages.
-3. Each message is forwarded to a running agenthost agent's `/chat` endpoint.
-4. The agent's reply is sent back to the same WhatsApp chat.
+3. Messages you send to yourself are forwarded to a running agenthost agent's `/chat` endpoint.
+4. The agent's reply is sent back to your WhatsApp self-chat.
+
+The bridge reads your own WhatsApp identity (`state.creds.me`) from Baileys, so you do **not** need to configure your JID or LID manually.
 
 ## Prerequisites
 
@@ -52,23 +54,15 @@ The session is saved to `./auth_state`, so you normally only need to scan once.
 
 ## Usage
 
-Send a text message to your own WhatsApp number from any other WhatsApp account. The bridge forwards it to the agent and replies in the same chat.
+Message yourself on WhatsApp. The bridge forwards it to the agent and replies in your self-chat with an `/ai` prefix so you can tell which messages came from the AI.
 
-You can also message **yourself** from your own phone by setting:
+The bridge ignores any message that starts with `/ai` or `/system`, so it never replies to its own messages.
 
-```env
-RESPOND_TO_FROM_ME=true
-```
-
-The bridge forwards your messages to the agent and replies with an `/ai` prefix so you can tell which messages came from the AI. The bridge ignores any message that starts with `/ai` or `/system`, so it never replies to its own messages.
-
-If you only want the agent to respond when you message **yourself** (not when you message other contacts), set:
+Messages you send to **other** contacts are ignored by default. If you want the bridge to also respond to incoming messages from other people, set:
 
 ```env
-WHATSAPP_SELF_JID=84623824551941@lid
+RESPOND_TO_OTHERS=true
 ```
-
-Your self-chat JID is often a privacy LID. Check the bridge logs when you message yourself; it will print the `remoteJid`.
 
 ### System messages
 
@@ -86,14 +80,17 @@ If you send a new message while the agent is still responding to your previous o
 
 ## Outbound WhatsApp messages (scheduled events)
 
-The bridge can also push messages to WhatsApp without an incoming message. Set:
+The bridge exposes a small HTTP server at `http://127.0.0.1:9001/send`. The agent can call the built-in `send_whatsapp_message(text)` tool (enabled via `agent.yaml` `builtin_tools: [whatsapp]`) to POST messages to that endpoint.
 
-```env
-WHATSAPP_TARGET_JID=1234567890@s.whatsapp.net
-BRIDGE_HTTP_PORT=9001
+By default, outbound messages are sent to your WhatsApp self-chat. You can also specify a target:
+
+```json
+POST /send
+{
+  "text": "hello",
+  "to": "1234567890@s.whatsapp.net"
+}
 ```
-
-The bridge starts a small HTTP server at `http://127.0.0.1:9001/send`. The agent can call the built-in `send_whatsapp_message(text)` tool (enabled via `agent.yaml` `builtin_tools: [whatsapp]`) to POST messages to that endpoint.
 
 This is useful for scheduled events: the event prompt tells the agent to run a task and then call `send_whatsapp_message` with the result.
 
@@ -110,7 +107,7 @@ The agent uses the unified `event_tool(action="add", action_name="...", ...)` to
 ## Notes
 
 - Only direct (1:1) text messages are handled. Group messages, status broadcasts, and media messages are ignored.
-- The sender's WhatsApp JID is used directly as the agent `thread_id`, so conversation history persists across restarts.
+- Self-chat uses a stable phone-number `thread_id`, so conversation history persists even if WhatsApp changes your LID.
 - If you log out from WhatsApp's Linked Devices, delete `./auth_state` and scan the QR code again.
 
 ## Production / VPC
