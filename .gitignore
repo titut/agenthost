@@ -18,6 +18,7 @@ env/
 
 # ── Auto-generated agent memory (created at runtime) ─────────────────
 agents/*/memory/
+agents/CUSTOMER_SERVICE
 
 # ── Agent-generated output (architecture, test plans, etc.) ──────────
 agents/*/output/

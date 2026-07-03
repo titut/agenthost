@@ -26,6 +26,15 @@ AGENT_RETRIES = int(os.environ.get("AGENT_RETRIES", "3"))
 AGENT_RETRY_DELAY = int(os.environ.get("AGENT_RETRY_DELAY", "2"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "info").lower()
 
+# Comma-separated list of Telegram usernames allowed to use this bot.
+# If empty, all users are allowed. Usernames are case-insensitive and should
+# not include the leading @.
+ALLOWED_USERNAMES = {
+    u.strip().lstrip("@").lower()
+    for u in os.environ.get("ALLOWED_USERNAMES", "").split(",")
+    if u.strip()
+}
+
 LEVELS = ["silent", "error", "warn", "info", "debug", "trace"]
 
 
@@ -131,6 +140,18 @@ def send_telegram_message(chat_id: int, text: str, reply_to_message_id: int | No
         raise
 
 
+def is_user_allowed(message: dict[str, Any]) -> tuple[bool, str | None]:
+    """Check if the sender is in the allowed username list."""
+    if not ALLOWED_USERNAMES:
+        return True, None
+
+    sender = message.get("from", {})
+    username = (sender.get("username") or "").lower()
+    if username and username in ALLOWED_USERNAMES:
+        return True, username
+    return False, username
+
+
 def process_update(update: dict[str, Any]) -> None:
     """Handle a single Telegram update."""
     log("debug", f"Received update: {json.dumps(update, default=str)}")
@@ -149,8 +170,20 @@ def process_update(update: dict[str, Any]) -> None:
         log("debug", "Ignoring non-text message")
         return
 
+    allowed, username = is_user_allowed(message)
+    if not allowed:
+        log("warn", f"Ignoring message from unauthorized user @{username or '<no username>'}")
+        return
+
+    # Handle helper commands directly.
+    command = text.strip().lower()
+    if command in ("/start", "/id"):
+        reply = f"Your username is @{username or '<not set>'}.\nchat_id={chat_id}"
+        send_telegram_message(chat_id, reply, reply_to_message_id=message_id)
+        return
+
     thread_id = str(chat_id)
-    log("info", f"chat_id={chat_id} -> thread_id={thread_id}: {text[:80]}")
+    log("info", f"chat_id={chat_id} user=@{username or '?'} -> thread_id={thread_id}: {text[:80]}")
 
     try:
         reply = fetch_agent_reply(thread_id, text)
@@ -177,6 +210,10 @@ def run() -> None:
     log("info", f"AGENT_RETRIES={AGENT_RETRIES}")
     log("info", f"AGENT_RETRY_DELAY={AGENT_RETRY_DELAY}")
     log("info", f"LOG_LEVEL={LOG_LEVEL}")
+    if ALLOWED_USERNAMES:
+        log("info", f"ALLOWED_USERNAMES={sorted(ALLOWED_USERNAMES)}")
+    else:
+        log("info", "ALLOWED_USERNAMES=<none> (open to all users)")
 
     check_agent_health()
 

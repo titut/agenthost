@@ -46,6 +46,18 @@ python main.py
 
 Send a text message to your bot on Telegram. The bridge forwards it to the agent's `/chat` endpoint (using the Telegram `chat_id` as the `thread_id`) and sends the agent's reply back.
 
+## Access control
+
+To restrict the bot to specific users, set their Telegram usernames (without `@`):
+
+```env
+ALLOWED_USERNAMES=billle,janedoe
+```
+
+Messages from anyone else are ignored.
+
+To find your username, message the bot `/start` or `/id`.
+
 ## Notes
 
 - The bridge uses long polling. It will keep running until you stop it.
