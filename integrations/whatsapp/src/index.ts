@@ -26,6 +26,9 @@ const BRIDGE_HTTP_PORT = parseInt(process.env.BRIDGE_HTTP_PORT ?? '9001', 10);
 // Track threads that currently have an in-flight agent request.
 const busyThreads = new Set<string>();
 
+// The authenticated user's own WhatsApp JID. Populated once connected.
+let ownJid: string | null = null;
+
 const LEVELS = ['silent', 'error', 'warn', 'info', 'debug', 'trace'] as const;
 type LogLevel = (typeof LEVELS)[number];
 
@@ -194,11 +197,19 @@ async function sendSystemMessage(sock: WASocket, jid: string, text: string): Pro
   await sock.sendMessage(jid, { text: message });
 }
 
+const IGNORED_STATUSES = new Set(['DELIVERY_ACK', 'SERVER_ACK', 'READ', 'PLAYED']);
+
 async function handleIncomingMessage(sock: WASocket, msg: WAMessage): Promise<void> {
   log('debug', 'Received raw message:', JSON.stringify(msg, null, 2));
 
   const key = msg.key;
   const remoteJid = key.remoteJid;
+
+  const msgStatus = msg.status?.toString();
+  if (msgStatus && IGNORED_STATUSES.has(msgStatus)) {
+    log('debug', `Ignoring status update: ${msgStatus}`);
+    return;
+  }
 
   if (!remoteJid) {
     log('debug', 'Ignoring message without remoteJid');
@@ -235,6 +246,12 @@ async function handleIncomingMessage(sock: WASocket, msg: WAMessage): Promise<vo
   if (key.fromMe) {
     if (!RESPOND_TO_FROM_ME) {
       log('debug', `Ignoring message from self (jid=${remoteJid})`);
+      return;
+    }
+
+    // Only respond to messages the user sent to themselves.
+    if (ownJid && remoteJid !== ownJid) {
+      log('debug', `Ignoring message from self to another contact (to=${remoteJid}, own=${ownJid})`);
       return;
     }
   } else {
@@ -413,6 +430,10 @@ async function start(): Promise<void> {
       }
     } else if (connection === 'open') {
       log('info', 'WhatsApp connection ready.');
+      if (sock.user?.id) {
+        ownJid = sock.user.id;
+        log('info', `Authenticated as ${ownJid}`);
+      }
     } else if (connection === 'connecting') {
       log('debug', 'WhatsApp connecting...');
     }
