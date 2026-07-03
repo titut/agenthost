@@ -38,6 +38,8 @@ class Agent:
         self.system_prompt = config.system_prompt + build_builtin_tools_prompt(config)
 
     async def chat(self, thread_id: str, user_message: str) -> AsyncIterator[str]:
+        # Expose the current thread_id to built-in tools that need it.
+        self._current_thread_id = thread_id
         logger.info(
             "Agent '%s' thread '%s' received user message", self.config.name, thread_id
         )
@@ -190,5 +192,18 @@ class Agent:
 
     def _build_messages(self, thread_id: str) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [{"role": "system", "content": self.system_prompt}]
-        messages.extend(self.memory.get_messages(thread_id))
+
+        # Prepend the thread_id to the latest user message so the agent always
+        # knows which conversation it is in. This is needed for tools like
+        # send_discord_message that must target the same channel/thread.
+        # Memory stays clean because we only modify the copy sent to the LLM.
+        history = self.memory.get_messages(thread_id)
+        if history and history[-1]["role"] == "user":
+            history = list(history)
+            history[-1] = {
+                **history[-1],
+                "content": f"[thread_id: {thread_id}] {history[-1]['content']}",
+            }
+
+        messages.extend(history)
         return messages

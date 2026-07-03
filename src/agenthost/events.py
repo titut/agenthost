@@ -186,6 +186,10 @@ class ScheduledEvent(BaseModel):
     schedule: EventSchedule
     enabled: bool = True
     prompt: str
+    # Optional thread_id inherited from the conversation where the event was
+    # created. Used by scheduled runs so the agent keeps the right context
+    # (e.g. the Discord channel to send messages back to).
+    thread_id: str | None = None
 
 
 class EventsConfig(BaseModel):
@@ -229,7 +233,7 @@ async def run_scheduled_event(agent: "Agent", event: ScheduledEvent) -> None:
     )
     # Allow events to run in the same thread as an ongoing chat (e.g. WhatsApp)
     # by configuring event_thread_id in agent.yaml extra fields.
-    thread_id = agent.config.extra.get("event_thread_id") or f"scheduled:{event.name}"
+    thread_id = event.thread_id or agent.config.extra.get("event_thread_id") or f"scheduled:{event.name}"
     response_parts: list[str] = []
 
     try:

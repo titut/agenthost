@@ -305,29 +305,73 @@ class DateTimeTools:
         })
 
 
-class WhatsAppTools:
-    """Tool for sending outbound WhatsApp messages via the bridge's /send endpoint."""
+class ThreadTools:
+    """Tool for exposing the current conversation thread ID to the agent."""
 
-    def __init__(self, config: AgentConfig):
+    def __init__(self, agent_provider: Callable[[], "Agent"] | None):
+        self._agent_provider = agent_provider
+
+    def get_current_thread_id(self) -> str:
+        """Return the current conversation thread_id.
+
+        Use this when you need to know the current thread_id, for example to
+        call send_discord_message with the correct channel ID.
+        """
+        agent = self._agent_provider() if self._agent_provider else None
+        thread_id = getattr(agent, "_current_thread_id", None) if agent else None
+        return json.dumps({"thread_id": thread_id or "unknown"})
+
+
+class DiscordTools:
+    """Tool for sending outbound Discord messages via the bridge's /send endpoint."""
+
+    def __init__(
+        self,
+        config: AgentConfig,
+        agent_provider: Callable[[], "Agent"] | None = None,
+    ):
         self.config = config
+        self._agent_provider = agent_provider
 
-    def send_whatsapp_message(self, text: str) -> str:
-        """Send a WhatsApp message to the configured target JID.
+    def send_discord_message(self, message: str, thread_id: str) -> str:
+        """Send a Discord message to the channel identified by thread_id.
 
         The agent can call this from scheduled events or any other workflow to
-        push a message to WhatsApp without waiting for an incoming message.
+        push a message to Discord without waiting for an incoming message.
+        The sent message is also recorded in the thread's memory so the agent
+        remembers it.
+
+        Args:
+            message: The text to send.
+            thread_id: The Discord channel ID (or DM channel ID) to send to.
         """
         bridge_url = (
-            self.config.extra.get("whatsapp_bridge_url")
-            or os.environ.get("WHATSAPP_BRIDGE_URL")
-            or "http://127.0.0.1:9001/send"
+            self.config.extra.get("discord_bridge_url")
+            or os.environ.get("DISCORD_BRIDGE_URL")
+            or "http://127.0.0.1:9002/send"
         )
         try:
-            response = httpx.post(bridge_url, json={"text": text}, timeout=30.0)
+            response = httpx.post(
+                bridge_url,
+                json={"text": message, "thread_id": thread_id},
+                timeout=30.0,
+            )
             response.raise_for_status()
-            return json.dumps({"status": "sent", "bridge": bridge_url})
+
+            # Record the outbound message in memory so the agent remembers sending it.
+            agent = self._agent_provider() if self._agent_provider else None
+            if agent is not None:
+                try:
+                    agent.memory.append_message(
+                        thread_id,
+                        {"role": "assistant", "content": message},
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Failed to record Discord message in memory: %s", exc)
+
+            return json.dumps({"status": "sent", "thread_id": thread_id, "bridge": bridge_url})
         except Exception as exc:  # noqa: BLE001
-            return json.dumps({"error": f"Failed to send WhatsApp message: {exc}"})
+            return json.dumps({"error": f"Failed to send Discord message: {exc}"})
 
 
 def build_builtin_tools_prompt(config: AgentConfig) -> str:
@@ -349,11 +393,18 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
             "- `get_current_datetime()`: Return the current date and time. "
             "Use this whenever the user asks about the current date, time, day, or year."
         )
-    if "whatsapp" in enabled or "send_whatsapp_message" in enabled:
+    if "discord" in enabled or "send_discord_message" in enabled:
         descriptions.append(
-            "- `send_whatsapp_message(text)`: Push a message to WhatsApp via the bridge. "
-            "Use this when the user asks you to send something to WhatsApp, "
-            "or when a scheduled event prompt instructs you to deliver results to WhatsApp."
+            "- `send_discord_message(message, thread_id)`: Push a message to Discord via the bridge. "
+            "Use this when the user asks you to send something to Discord, "
+            "or when a scheduled event prompt instructs you to deliver results to Discord. "
+            "The thread_id must be the current conversation thread_id, which is shown at the top of the system prompt. "
+            "If you are unsure of the current thread_id, call `get_current_thread_id()` first."
+        )
+    if "thread" in enabled or "get_current_thread_id" in enabled:
+        descriptions.append(
+            "- `get_current_thread_id()`: Return the current conversation thread_id. "
+            "Use this when a tool like send_discord_message needs a thread_id and you are not certain of it."
         )
 
     if not descriptions:
@@ -372,10 +423,10 @@ def make_builtin_tools(
     group names or individual tool names:
 
         extra:
-          builtin_tools: [events, whatsapp]
+          builtin_tools: [events, discord]
 
         extra:
-          builtin_tools: [add_event, send_whatsapp_message]
+          builtin_tools: [add_event, send_discord_message, get_current_thread_id]
     """
     enabled = config.extra.get("builtin_tools") or []
     if isinstance(enabled, str):
@@ -386,11 +437,13 @@ def make_builtin_tools(
     # Build the full tool registry first.
     event_tools = EventTools(config, scheduler, agent_provider)
     datetime_tools = DateTimeTools()
-    whatsapp_tools = WhatsAppTools(config)
+    discord_tools = DiscordTools(config, agent_provider)
+    thread_tools = ThreadTools(agent_provider)
     available = {
         "event_tool": event_tools.event_tool,
         "get_current_datetime": datetime_tools.get_current_datetime,
-        "send_whatsapp_message": whatsapp_tools.send_whatsapp_message,
+        "send_discord_message": discord_tools.send_discord_message,
+        "get_current_thread_id": thread_tools.get_current_thread_id,
     }
 
     for item in enabled:
@@ -398,8 +451,10 @@ def make_builtin_tools(
             functions["event_tool"] = available["event_tool"]
         elif item == "datetime":
             functions["get_current_datetime"] = available["get_current_datetime"]
-        elif item == "whatsapp":
-            functions["send_whatsapp_message"] = available["send_whatsapp_message"]
+        elif item == "discord":
+            functions["send_discord_message"] = available["send_discord_message"]
+        elif item == "thread":
+            functions["get_current_thread_id"] = available["get_current_thread_id"]
         elif item in available:
             functions[item] = available[item]
         else:

@@ -54,7 +54,7 @@ LEVELS = ["silent", "error", "warn", "info", "debug", "trace"]
 # Shared client for Telegram API calls. Uses an explicit proxy/timeout so it
 # doesn't pick up ambient HTTP_PROXY variables intended for other traffic.
 TELEGRAM_TIMEOUT = httpx.Timeout(
-    connect=TELEGRAM_CONNECT_TIMEOUT, read=TELEGRAM_READ_TIMEOUT
+    TELEGRAM_READ_TIMEOUT, connect=TELEGRAM_CONNECT_TIMEOUT
 )
 TELEGRAM_CLIENT = httpx.Client(
     proxies=TELEGRAM_PROXY,
@@ -74,7 +74,7 @@ def check_agent_health() -> dict[str, Any]:
     """Verify the agent is reachable before starting the poll loop."""
     log("info", f"Checking agent health at {AGENT_HEALTH_URL}")
     try:
-        response = httpx.get(AGENT_HEALTH_URL, timeout=httpx.Timeout(connect=10.0, read=10.0))
+        response = httpx.get(AGENT_HEALTH_URL, timeout=httpx.Timeout(10.0))
         response.raise_for_status()
         data = response.json()
         log("info", f"Agent healthy: {data.get('agent')} @ {data.get('model')}")
