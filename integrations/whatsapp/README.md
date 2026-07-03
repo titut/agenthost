@@ -62,6 +62,14 @@ RESPOND_TO_FROM_ME=true
 
 The bridge forwards your messages to the agent and replies with an `/ai` prefix so you can tell which messages came from the AI. The bridge ignores any message that starts with `/ai` or `/system`, so it never replies to its own messages.
 
+If you only want the agent to respond when you message **yourself** (not when you message other contacts), set:
+
+```env
+WHATSAPP_SELF_JID=84623824551941@lid
+```
+
+Your self-chat JID is often a privacy LID. Check the bridge logs when you message yourself; it will print the `remoteJid`.
+
 ### System messages
 
 When something goes wrong, the bridge sends a `/system` message to the chat, e.g.:

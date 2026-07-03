@@ -21,13 +21,11 @@ const AI_PREFIX = process.env.AI_PREFIX ?? '/ai';
 const SYSTEM_PREFIX = process.env.SYSTEM_PREFIX ?? '/system';
 const BUSY_MESSAGE = process.env.BUSY_MESSAGE ?? 'agent is busy, wait for response before sending another message';
 const WHATSAPP_TARGET_JID = process.env.WHATSAPP_TARGET_JID;
+const WHATSAPP_SELF_JID = process.env.WHATSAPP_SELF_JID;
 const BRIDGE_HTTP_PORT = parseInt(process.env.BRIDGE_HTTP_PORT ?? '9001', 10);
 
 // Track threads that currently have an in-flight agent request.
 const busyThreads = new Set<string>();
-
-// The authenticated user's own WhatsApp JID. Populated once connected.
-let ownJid: string | null = null;
 
 const LEVELS = ['silent', 'error', 'warn', 'info', 'debug', 'trace'] as const;
 type LogLevel = (typeof LEVELS)[number];
@@ -250,8 +248,10 @@ async function handleIncomingMessage(sock: WASocket, msg: WAMessage): Promise<vo
     }
 
     // Only respond to messages the user sent to themselves.
-    if (ownJid && remoteJid !== ownJid) {
-      log('debug', `Ignoring message from self to another contact (to=${remoteJid}, own=${ownJid})`);
+    // WhatsApp self-chat uses a privacy LID that differs from the real JID,
+    // so we rely on WHATSAPP_SELF_JID env var for an exact match.
+    if (WHATSAPP_SELF_JID && remoteJid !== WHATSAPP_SELF_JID) {
+      log('debug', `Ignoring message from self to another contact (to=${remoteJid}, self=${WHATSAPP_SELF_JID})`);
       return;
     }
   } else {
@@ -352,6 +352,7 @@ async function start(): Promise<void> {
   log('info', `AI_PREFIX=${AI_PREFIX}`);
   log('info', `SYSTEM_PREFIX=${SYSTEM_PREFIX}`);
   log('info', `WHATSAPP_TARGET_JID=${WHATSAPP_TARGET_JID ?? '<not set>'}`);
+  log('info', `WHATSAPP_SELF_JID=${WHATSAPP_SELF_JID ?? '<not set>'}`);
   log('info', `BRIDGE_HTTP_PORT=${BRIDGE_HTTP_PORT}`);
 
   await ensureDir(AUTH_STATE_DIR);
@@ -430,10 +431,7 @@ async function start(): Promise<void> {
       }
     } else if (connection === 'open') {
       log('info', 'WhatsApp connection ready.');
-      if (sock.user?.id) {
-        ownJid = sock.user.id;
-        log('info', `Authenticated as ${ownJid}`);
-      }
+
     } else if (connection === 'connecting') {
       log('debug', 'WhatsApp connecting...');
     }

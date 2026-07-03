@@ -609,6 +609,19 @@ On first run, scan the QR code with WhatsApp (**Settings → Linked Devices → 
 
 See `integrations/whatsapp/README.md` for details.
 
+## Telegram Bridge (Recommended)
+
+A simpler alternative to WhatsApp is available under `integrations/telegram/`. It uses Telegram's official Bot API — no QR pairing, no phone number linking, and the bot has its own identity.
+
+```bash
+cd integrations/telegram
+cp .env.example .env
+# set TELEGRAM_BOT_TOKEN from @BotFather
+../../venv/bin/python main.py
+```
+
+See `integrations/telegram/README.md` for details.
+
 ### Scheduled Events + WhatsApp
 
 To push scheduled event results to WhatsApp, enable both built-in tool packs and configure the bridge:
