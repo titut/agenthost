@@ -233,12 +233,11 @@ class Agent:
     ) -> list[dict[str, Any]]:
         """Normalize persisted tool_calls for the API.
 
-        - Strip provider-specific extra fields (e.g.
-          ``extra_content.google.thought_signature``) that are not part of the
-          OpenAI tool-call schema.
-        - Ensure ``function.arguments`` is valid JSON. Some models emit
-          concatenated JSON objects when trying to batch multiple calls; the
-          API rejects those if sent back verbatim.
+        Ensures ``function.arguments`` is valid JSON. Some models emit
+        concatenated JSON objects when trying to batch multiple calls; the API
+        rejects those if sent back verbatim. Provider-specific extra fields
+        (e.g. Gemini's ``extra_content.google.thought_signature``) are preserved
+        because Gemini requires them on subsequent turns.
         """
         cleaned: list[dict[str, Any]] = []
         for msg in history:
@@ -247,14 +246,12 @@ class Agent:
             if tool_calls:
                 cleaned_tool_calls: list[dict[str, Any]] = []
                 for tc in tool_calls:
-                    function = dict(tc.get("function", {}))
+                    tc_copy = dict(tc)
+                    function = dict(tc_copy.get("function", {}))
                     args = Agent._parse_tool_arguments(function.get("arguments", ""))
                     function["arguments"] = json.dumps(args)
-                    cleaned_tool_calls.append({
-                        "id": tc.get("id", ""),
-                        "type": tc.get("type", "function"),
-                        "function": function,
-                    })
+                    tc_copy["function"] = function
+                    cleaned_tool_calls.append(tc_copy)
                 msg_copy["tool_calls"] = cleaned_tool_calls
             cleaned.append(msg_copy)
         return cleaned
