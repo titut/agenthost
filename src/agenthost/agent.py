@@ -5,7 +5,7 @@ import asyncio
 import json
 from typing import Any, AsyncIterator
 
-from openai import AsyncOpenAI, BadRequestError, BadRequestError
+from openai import AsyncOpenAI, BadRequestError
 
 from agenthost.builtin_tools import build_builtin_tools_prompt, make_builtin_tools
 from agenthost.config import AgentConfig
@@ -123,7 +123,7 @@ class Agent:
                                 index,
                             )
                         while len(tool_calls) <= index:
-                            tool_calls.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                            tool_calls.append({"id": f"call_{len(tool_calls)}", "type": "function", "function": {"name": "", "arguments": ""}})
                         if tc.id:
                             tool_calls[index]["id"] = tc.id
                         if tc.function and tc.function.name:
@@ -177,7 +177,6 @@ class Agent:
                     tool_msg = {
                         "role": "tool",
                         "tool_call_id": tc["id"],
-                        "name": name,
                         "content": result,
                     }
                     self.memory.append_message(thread_id, tool_msg)

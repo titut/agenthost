@@ -105,22 +105,29 @@ class AgentMemory:
 
             tool_calls = json.loads(row["tool_calls"])
             expected_ids = {tc.get("id") for tc in tool_calls if tc.get("id")}
-            if not expected_ids:
-                i += 1
-                continue
 
             j = i + 1
-            found_ids: set[str] = set()
             while j < len(rows) and rows[j]["role"] == "tool":
-                found_ids.add(rows[j]["tool_call_id"])
                 j += 1
+            following_tool_rows = rows[i + 1 : j]
 
+            if not expected_ids:
+                # Tool calls without IDs cannot be reliably matched to tool
+                # responses and are invalid for most providers. Remove the
+                # dangling assistant message and any following tool messages.
+                ids_to_delete.add(row["id"])
+                for tool_row in following_tool_rows:
+                    ids_to_delete.add(tool_row["id"])
+                i = j
+                continue
+
+            found_ids = {tool_row["tool_call_id"] for tool_row in following_tool_rows}
             if not expected_ids <= found_ids:
                 ids_to_delete.add(row["id"])
                 # Also discard any tool responses that immediately followed this
                 # dangling assistant message, since they no longer have a caller.
-                for k in range(i + 1, j):
-                    ids_to_delete.add(rows[k]["id"])
+                for tool_row in following_tool_rows:
+                    ids_to_delete.add(tool_row["id"])
             i = j
 
         # Pass 2: remove orphaned tool messages whose tool_call_id is not declared
