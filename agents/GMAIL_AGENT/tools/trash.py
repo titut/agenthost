@@ -38,10 +38,15 @@ _get_gmail_service = _gmail_base.get_gmail_service
 
 
 def trash_message(message_id: str) -> dict[str, Any]:
-    """Move a message to the trash.
+    """Move a single message to the trash.
 
     This is **reversible** — the message can be restored via
     ``untrash_message`` or manually in the Gmail web interface.
+
+    **Important:** This tool operates on exactly one message. To trash multiple
+    messages, make multiple separate tool calls, one for each ``message_id``.
+    Do not pass multiple message IDs or concatenate JSON objects in a single
+    call.
 
     Parameters
     ----------
@@ -81,9 +86,14 @@ def trash_message(message_id: str) -> dict[str, Any]:
 
 
 def untrash_message(message_id: str) -> dict[str, Any]:
-    """Restore a trashed message to the inbox.
+    """Restore a single trashed message to the inbox.
 
     This reverses a ``trash_message`` call.
+
+    **Important:** This tool operates on exactly one message. To untrash
+    multiple messages, make multiple separate tool calls, one for each
+    ``message_id``. Do not pass multiple message IDs or concatenate JSON
+    objects in a single call.
 
     Parameters
     ----------
@@ -126,13 +136,18 @@ def delete_message_permanently(
     message_id: str,
     confirmed: bool = False,
 ) -> dict[str, Any]:
-    """Permanently delete a message.
+    """Permanently delete a single message.
 
     ⚠️ **This operation is IRREVERSIBLE.** The message will be immediately
     and permanently removed and cannot be recovered.
 
     As a safety guard, the caller must pass ``confirmed=True`` to proceed.
     Without it, the function returns an error explaining the requirement.
+
+    **Important:** This tool operates on exactly one message. To delete
+    multiple messages, make multiple separate tool calls, one for each
+    ``message_id``. Do not pass multiple message IDs or concatenate JSON
+    objects in a single call.
 
     Parameters
     ----------

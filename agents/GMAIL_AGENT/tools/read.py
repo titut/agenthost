@@ -49,6 +49,11 @@ def get_message(
 ) -> dict[str, Any]:
     """Fetch a single message by its Gmail message ID.
 
+    **Important:** This tool operates on exactly one message. To fetch multiple
+    messages, make multiple separate tool calls, one for each ``message_id``.
+    Do not pass multiple message IDs or concatenate JSON objects in a single
+    call.
+
     Parameters
     ----------
     message_id : str

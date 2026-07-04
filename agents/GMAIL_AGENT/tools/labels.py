@@ -92,7 +92,12 @@ def add_labels(
     message_id: str,
     label_ids: list[str],
 ) -> dict[str, Any]:
-    """Attach labels to a message.
+    """Attach labels to a single message.
+
+    **Important:** This tool operates on exactly one message. To add labels to
+    multiple messages, make multiple separate tool calls, one for each
+    ``message_id``. Do not pass multiple message IDs or concatenate JSON
+    objects in a single call.
 
     Parameters
     ----------
@@ -126,7 +131,12 @@ def remove_labels(
     message_id: str,
     label_ids: list[str],
 ) -> dict[str, Any]:
-    """Detach labels from a message.
+    """Detach labels from a single message.
+
+    **Important:** This tool operates on exactly one message. To remove labels
+    from multiple messages, make multiple separate tool calls, one for each
+    ``message_id``. Do not pass multiple message IDs or concatenate JSON
+    objects in a single call.
 
     .. warning:: System labels ``INBOX``, ``SENT``, ``STARRED``, and
         ``IMPORTANT`` are managed by Gmail and **cannot** be manually

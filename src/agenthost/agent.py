@@ -157,10 +157,7 @@ class Agent:
 
                 for tc in tool_calls:
                     name = tc["function"]["name"]
-                    try:
-                        args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
-                    except json.JSONDecodeError:
-                        args = {}
+                    args = self._parse_tool_arguments(tc["function"]["arguments"])
 
                     logger.info(
                         "Agent '%s' thread '%s' calling tool '%s'",
@@ -226,5 +223,74 @@ class Agent:
                 "content": f"[thread_id: {thread_id}] {history[-1]['content']}",
             }
 
-        messages.extend(history)
+        messages.extend(self._merge_consecutive_messages(history))
         return messages
+
+    @staticmethod
+    def _parse_tool_arguments(arguments: str) -> dict[str, Any]:
+        """Parse tool arguments from the LLM.
+
+        Handles the common failure mode where the model concatenates multiple
+        JSON objects (e.g. when trying to call the same tool repeatedly in one
+        turn). In that case, the first complete object is returned.
+        """
+        if not arguments:
+            return {}
+
+        try:
+            parsed = json.loads(arguments)
+            if isinstance(parsed, dict):
+                return parsed
+            return {}
+        except json.JSONDecodeError:
+            pass
+
+        # Try to extract the first top-level JSON object.
+        decoder = json.JSONDecoder()
+        try:
+            obj, _ = decoder.raw_decode(arguments)
+            if isinstance(obj, dict):
+                logger.warning(
+                    "Tool arguments contained concatenated JSON; using first object: %s",
+                    obj,
+                )
+                return obj
+        except json.JSONDecodeError:
+            pass
+
+        return {}
+
+    @staticmethod
+    def _merge_consecutive_messages(
+        history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Merge consecutive content-only messages of the same role.
+
+        Providers such as Gemini require strictly alternating user/assistant
+        turns. Tool messages and assistant messages that declare tool_calls are
+        left untouched so tool-call/tool-response pairing stays intact.
+        """
+        merged: list[dict[str, Any]] = []
+        for msg in history:
+            if not merged:
+                merged.append(dict(msg))
+                continue
+
+            last = merged[-1]
+            both_plain = (
+                last["role"] == msg["role"]
+                and "tool_calls" not in last
+                and "tool_calls" not in msg
+                and "tool_call_id" not in last
+                and "tool_call_id" not in msg
+            )
+            if both_plain:
+                last_content = last.get("content") or ""
+                msg_content = msg.get("content") or ""
+                separator = "\n\n" if last_content and msg_content else ""
+                last["content"] = f"{last_content}{separator}{msg_content}".strip()
+                continue
+
+            merged.append(dict(msg))
+
+        return merged
