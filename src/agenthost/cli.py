@@ -183,6 +183,8 @@ def _stream_turn(
                             )
                         elif event_type == "tool_result":
                             print(f"[tool result: {event_data['result']}]")
+                        elif event_type == "error":
+                            print(f"\n[error: {event_data}]")
                     elif current_event == "done":
                         print()
                     elif current_event == "error":

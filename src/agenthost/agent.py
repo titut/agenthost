@@ -54,6 +54,15 @@ class Agent:
 
         attempt = 0
         max_attempts = 5
+        tool_round = 0
+        max_tool_rounds = 15
+        recent_tool_errors: list[str] = []
+
+        def _graceful_error(message: str) -> str:
+            logger.error(message)
+            self.memory.append_message(thread_id, {"role": "assistant", "content": message})
+            return json.dumps({"type": "error", "data": message}) + "\n"
+
         while True:
             completion_kwargs: dict[str, Any] = {
                 "model": self.config.model,
@@ -76,16 +85,17 @@ class Agent:
 
             try:
                 stream = await self.client.chat.completions.create(**completion_kwargs)
+                attempt = 0
             except Exception as exc:
                 attempt += 1
                 if attempt >= max_attempts:
-                    logger.error(
-                        "LLM request failed for thread '%s' after %d attempts: %s",
-                        thread_id,
-                        attempt,
-                        exc,
+                    error_summary = (
+                        f"Request to the language model failed after {max_attempts} attempts "
+                        f"({type(exc).__name__}). The conversation state may be invalid. "
+                        "Try clearing the thread or rephrasing your request."
                     )
-                    raise
+                    yield _graceful_error(error_summary)
+                    break
 
                 logger.warning(
                     "LLM request failed for thread '%s' (attempt %d/%d): %s; repairing and retrying in 1s",
@@ -146,6 +156,18 @@ class Agent:
                                 logger.debug("Preserved tool-call extra field: %s", key)
 
             if tool_calls:
+                tool_round += 1
+                if tool_round > max_tool_rounds:
+                    error_lines = "\n".join(f"- {e}" for e in recent_tool_errors[-5:])
+                    error_summary = (
+                        f"I tried using tools {tool_round - 1} times but kept running into issues. "
+                        "Recent tool errors:\n" + (error_lines or "(no specific errors recorded)") +
+                        "\n\nI stopped to avoid an API error. Try rephrasing your request, "
+                        "or specify one simple action at a time."
+                    )
+                    yield _graceful_error(error_summary)
+                    break
+
                 logger.debug(
                     "LLM response for thread '%s' produced tool_calls: %s",
                     thread_id,
@@ -182,9 +204,13 @@ class Agent:
                         yield json.dumps({"type": "tool_error", "data": {"name": name, "error": result}}) + "\n"
                     yield json.dumps({"type": "tool_result", "data": {"name": name, "result": result}}) + "\n"
 
+                    if "error" in json.loads(result):
+                        recent_tool_errors.append(f"{name}: {result}")
+
                     tool_msg = {
                         "role": "tool",
                         "tool_call_id": tc["id"],
+                        "name": name,
                         "content": result,
                     }
                     self.memory.append_message(thread_id, tool_msg)

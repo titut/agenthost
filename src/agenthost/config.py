@@ -73,6 +73,15 @@ class AgentConfig:
             for name, content in skills.items():
                 parts.append(f"\n## {name}\n\n{content}")
 
+        parts.append(
+            "\n\n# Tool Usage Instructions\n\n"
+            "Carefully read each tool's description to understand whether it operates on a "
+            "single item or supports batch operations. Unless a tool is explicitly described "
+            "as accepting multiple items in one call, make exactly one tool call per item. "
+            "Provide all required arguments as a single valid JSON object. Do not concatenate "
+            "multiple JSON objects or multiple tool calls into one argument string."
+        )
+
         return "\n".join(parts)
 
     @classmethod

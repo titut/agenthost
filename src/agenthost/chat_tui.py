@@ -1003,6 +1003,13 @@ class ChatApp(App):
             await self.chat_scroll.mount(card)
             self.chat_scroll.scroll_end(animate=False)
 
+        elif event_type == "error":
+            self._current_assistant = None
+            error = event_data if isinstance(event_data, str) else str(event_data)
+            card = ToolResultCard("agent", f"ERROR: {error}")
+            await self.chat_scroll.mount(card)
+            self.chat_scroll.scroll_end(animate=False)
+
     def _track_touched(self, name: str, arguments: dict[str, Any]) -> None:
         path_tools = {"read_file", "write_file", "edit_file", "delete_file"}
         if name not in path_tools:
