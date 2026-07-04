@@ -31,6 +31,15 @@ class InProcessToolRunner(ToolRunner):
         if fn is None:
             return json.dumps({"error": f"Tool not found: {tool_name}"})
 
+        missing = _missing_required_args(fn, arguments)
+        if missing:
+            return json.dumps(
+                {
+                    "error": f"Missing required arguments for tool '{tool_name}': {', '.join(missing)}. "
+                    f"Please provide all required arguments and try again."
+                }
+            )
+
         try:
             coerced = _coerce_arguments(fn, arguments)
             if inspect.iscoroutinefunction(fn):
@@ -100,6 +109,16 @@ def _build_tool_schema(fn: Callable[..., Any]) -> dict[str, Any]:
             },
         },
     }
+
+
+def _missing_required_args(fn: Callable[..., Any], arguments: dict[str, Any]) -> list[str]:
+    """Return the names of required parameters that are missing from arguments."""
+    sig = inspect.signature(fn)
+    missing: list[str] = []
+    for name, param in sig.parameters.items():
+        if param.default is inspect.Parameter.empty and name not in arguments:
+            missing.append(name)
+    return missing
 
 
 def _coerce_arguments(fn: Callable[..., Any], arguments: dict[str, Any]) -> dict[str, Any]:
