@@ -68,6 +68,12 @@ class Agent:
             if self.config.thinking is not None:
                 completion_kwargs["reasoning_effort"] = self.config.thinking
 
+            logger.debug(
+                "LLM request for thread '%s': %s",
+                thread_id,
+                json.dumps(completion_kwargs, default=str),
+            )
+
             try:
                 stream = await self.client.chat.completions.create(**completion_kwargs)
             except Exception as exc:
@@ -140,6 +146,11 @@ class Agent:
                                 logger.debug("Preserved tool-call extra field: %s", key)
 
             if tool_calls:
+                logger.debug(
+                    "LLM response for thread '%s' produced tool_calls: %s",
+                    thread_id,
+                    json.dumps(tool_calls, default=str),
+                )
                 # Persist assistant's tool call request.
                 self.memory.append_message(thread_id, {"role": "assistant", "tool_calls": tool_calls})
                 messages.append({"role": "assistant", "tool_calls": tool_calls})
@@ -186,6 +197,11 @@ class Agent:
                 continue
 
             if assistant_content:
+                logger.debug(
+                    "LLM response for thread '%s' produced content: %s",
+                    thread_id,
+                    assistant_content,
+                )
                 self.memory.append_message(thread_id, {"role": "assistant", "content": assistant_content})
             logger.info(
                 "Agent '%s' thread '%s' finished turn with %d total messages",
