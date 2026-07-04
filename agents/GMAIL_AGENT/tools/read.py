@@ -107,10 +107,14 @@ def get_message(
 
 
 def get_message_body(message_id: str) -> dict[str, Any]:
-    """Fetch a message and extract its plain-text body and key headers.
+    """Fetch a single message and extract its plain-text body and key headers.
 
     This is a convenience wrapper around ``get_message(..., format="full")``
     that parses out the body text, snippet, and common headers.
+
+    **Important:** Call this tool once per message. To read multiple messages,
+    make multiple separate tool calls, one for each ``message_id``. Do not pass
+    multiple message IDs or concatenated JSON objects in a single call.
 
     Parameters
     ----------
