@@ -211,50 +211,195 @@ class Agent:
     def _build_messages(self, thread_id: str) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [{"role": "system", "content": self.system_prompt}]
 
+        history = self.memory.get_messages(thread_id)
+
+        # Normalize and persist the cleaned history back to memory.db so that
+        # corrupted threads are repaired on disk, not just in the request payload.
+        normalized_history, was_modified = Agent._normalize_messages(history)
+        if was_modified:
+            self.memory.rewrite_thread(thread_id, normalized_history)
+
         # Prepend the thread_id to the latest user message so the agent always
         # knows which conversation it is in. This is needed for tools like
         # send_discord_message that must target the same channel/thread.
         # Memory stays clean because we only modify the copy sent to the LLM.
-        history = self.memory.get_messages(thread_id)
-        if history and history[-1]["role"] == "user":
-            history = list(history)
-            history[-1] = {
-                **history[-1],
-                "content": f"[thread_id: {thread_id}] {history[-1]['content']}",
+        if normalized_history and normalized_history[-1]["role"] == "user":
+            normalized_history = list(normalized_history)
+            normalized_history[-1] = {
+                **normalized_history[-1],
+                "content": f"[thread_id: {thread_id}] {normalized_history[-1]['content']}",
             }
 
-        cleaned_history = self._clean_tool_calls_for_api(history)
-        messages.extend(self._merge_consecutive_messages(cleaned_history))
+        messages.extend(normalized_history)
         return messages
 
     @staticmethod
-    def _clean_tool_calls_for_api(
-        history: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """Normalize persisted tool_calls for the API.
+    def _normalize_messages(
+        messages: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Fix common message-history corruptions before sending to the LLM.
 
-        Ensures ``function.arguments`` is valid JSON. Some models emit
-        concatenated JSON objects when trying to batch multiple calls; the API
-        rejects those if sent back verbatim. Provider-specific extra fields
-        (e.g. Gemini's ``extra_content.google.thought_signature``) are preserved
-        because Gemini requires them on subsequent turns.
+        Returns the cleaned message list and a boolean indicating whether any
+        changes were made. This avoids rewriting ``memory.db`` when the history
+        is already clean.
+
+        Repairs issues that providers such as Gemini's OpenAI-compatible
+        endpoint reject, including:
+
+        - Missing ``name`` on tool messages
+        - Concatenated/invalid JSON in tool-call ``function.arguments``
+        - Empty/missing tool-call IDs
+        - Consecutive user or assistant content messages
+        - Dangling assistant tool_calls without matching tool responses
+        - Orphan tool messages without a matching assistant tool_call
         """
+        if not messages:
+            return messages, False
+
+        modified = False
+
+        # --- Pass 1: clean individual tool_calls and tool messages -----------
         cleaned: list[dict[str, Any]] = []
-        for msg in history:
+        for msg in messages:
             msg_copy = dict(msg)
-            tool_calls = msg_copy.get("tool_calls")
-            if tool_calls:
-                cleaned_tool_calls: list[dict[str, Any]] = []
-                for tc in tool_calls:
+            role = msg_copy.get("role")
+
+            if role == "assistant" and msg_copy.get("tool_calls"):
+                cleaned_tcs: list[dict[str, Any]] = []
+                for idx, tc in enumerate(msg_copy["tool_calls"]):
                     tc_copy = dict(tc)
                     function = dict(tc_copy.get("function", {}))
-                    args = Agent._parse_tool_arguments(function.get("arguments", ""))
-                    function["arguments"] = json.dumps(args)
+                    original_args = function.get("arguments", "")
+                    args = Agent._parse_tool_arguments(original_args)
+                    new_args = json.dumps(args)
+                    if new_args != original_args:
+                        modified = True
+                    function["arguments"] = new_args
                     tc_copy["function"] = function
-                    cleaned_tool_calls.append(tc_copy)
-                msg_copy["tool_calls"] = cleaned_tool_calls
+                    if not tc_copy.get("id"):
+                        tc_copy["id"] = f"call_{idx}"
+                        modified = True
+                    cleaned_tcs.append(tc_copy)
+                msg_copy["tool_calls"] = cleaned_tcs
+
+            if role == "tool":
+                if not msg_copy.get("name"):
+                    msg_copy["name"] = ""
+                    modified = True
+
             cleaned.append(msg_copy)
-        return cleaned
+
+        # --- Pass 2: rebuild a valid alternating sequence --------------------
+        result: list[dict[str, Any]] = []
+        i = 0
+        n = len(cleaned)
+        seen_user = False
+        while i < n:
+            msg = cleaned[i]
+            role = msg.get("role")
+
+            if role == "system":
+                result.append(msg)
+                i += 1
+                continue
+
+            # Drop any messages before the first user turn; a valid conversation
+            # must start with a user message after the system prompt.
+            if not seen_user:
+                if role != "user":
+                    modified = True
+                    i += 1
+                    continue
+                seen_user = True
+
+            if role == "user":
+                # Merge consecutive user messages.
+                merged_content = msg.get("content") or ""
+                j = i + 1
+                while j < n and cleaned[j].get("role") == "user":
+                    modified = True
+                    next_content = cleaned[j].get("content") or ""
+                    if next_content:
+                        separator = "\n\n" if merged_content else ""
+                        merged_content = f"{merged_content}{separator}{next_content}".strip()
+                    j += 1
+                result.append({"role": "user", "content": merged_content})
+                i = j
+                continue
+
+            if role == "assistant":
+                # If previous result message is also assistant, we have a problem.
+                # If both are plain content, merge them.
+                if result and result[-1].get("role") == "assistant":
+                    prev = result[-1]
+                    if not msg.get("tool_calls") and not prev.get("tool_calls"):
+                        modified = True
+                        prev_content = prev.get("content") or ""
+                        msg_content = msg.get("content") or ""
+                        if msg_content:
+                            separator = "\n\n" if prev_content else ""
+                            prev["content"] = f"{prev_content}{separator}{msg_content}".strip()
+                        i += 1
+                        continue
+                    # Otherwise skip this assistant message to preserve ordering.
+                    modified = True
+                    i += 1
+                    continue
+
+                if msg.get("tool_calls"):
+                    # Collect immediately following tool messages.
+                    expected_ids = {tc.get("id") for tc in msg["tool_calls"] if tc.get("id")}
+                    j = i + 1
+                    following_tools: list[dict[str, Any]] = []
+                    while j < n and cleaned[j].get("role") == "tool":
+                        following_tools.append(cleaned[j])
+                        j += 1
+
+                    found_ids = {t.get("tool_call_id") for t in following_tools}
+                    if expected_ids and not expected_ids <= found_ids:
+                        # Dangling tool_call without all responses: discard it
+                        # and the partial tool responses that followed.
+                        modified = True
+                        i = j
+                        continue
+
+                    # Valid group: assistant tool_call + tool responses.
+                    result.append(msg)
+                    for tc in msg["tool_calls"]:
+                        matching = None
+                        for t in following_tools:
+                            if t.get("tool_call_id") == tc.get("id"):
+                                matching = t
+                                break
+                        if matching:
+                            tool_copy = dict(matching)
+                            if not tool_copy.get("name"):
+                                tool_copy["name"] = tc["function"].get("name", "")
+                                modified = True
+                            result.append(tool_copy)
+                    i = j
+                    continue
+                else:
+                    # Plain assistant content.
+                    result.append(msg)
+                    i += 1
+                    continue
+
+            if role == "tool":
+                # Orphan tool message without a preceding assistant tool_call.
+                modified = True
+                i += 1
+                continue
+
+            # Unknown role: drop it.
+            modified = True
+            i += 1
+
+        # If the overall structure changed (drops/merges), mark modified.
+        if len(result) != len(messages):
+            modified = True
+
+        return result, modified
 
     @staticmethod
     def _parse_tool_arguments(arguments: str) -> dict[str, Any]:
@@ -289,38 +434,3 @@ class Agent:
             pass
 
         return {}
-
-    @staticmethod
-    def _merge_consecutive_messages(
-        history: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """Merge consecutive content-only messages of the same role.
-
-        Providers such as Gemini require strictly alternating user/assistant
-        turns. Tool messages and assistant messages that declare tool_calls are
-        left untouched so tool-call/tool-response pairing stays intact.
-        """
-        merged: list[dict[str, Any]] = []
-        for msg in history:
-            if not merged:
-                merged.append(dict(msg))
-                continue
-
-            last = merged[-1]
-            both_plain = (
-                last["role"] == msg["role"]
-                and "tool_calls" not in last
-                and "tool_calls" not in msg
-                and "tool_call_id" not in last
-                and "tool_call_id" not in msg
-            )
-            if both_plain:
-                last_content = last.get("content") or ""
-                msg_content = msg.get("content") or ""
-                separator = "\n\n" if last_content and msg_content else ""
-                last["content"] = f"{last_content}{separator}{msg_content}".strip()
-                continue
-
-            merged.append(dict(msg))
-
-        return merged

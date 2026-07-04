@@ -219,6 +219,26 @@ class AgentMemory:
             conn.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
             conn.commit()
 
+    def rewrite_thread(self, thread_id: str, messages: list[dict[str, Any]]) -> None:
+        """Replace all messages for a specific thread with the given list."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
+            for msg in messages:
+                tool_calls = json.dumps(msg.get("tool_calls")) if msg.get("tool_calls") else None
+                conn.execute(
+                    "INSERT INTO messages (thread_id, role, content, tool_calls, tool_call_id, name) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        thread_id,
+                        msg["role"],
+                        msg.get("content"),
+                        tool_calls,
+                        msg.get("tool_call_id"),
+                        msg.get("name"),
+                    ),
+                )
+            conn.commit()
+
     def list_threads(self) -> list[dict[str, Any]]:
         """Return all thread IDs with a preview of their latest message."""
         with self._connect() as conn:
