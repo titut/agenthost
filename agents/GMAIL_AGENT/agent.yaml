@@ -1,6 +1,7 @@
 name: GMAIL_AGENT
-model: deepseek-v4-flash
+model: gemini-3.1-flash-lite
+base_url: https://generativelanguage.googleapis.com/v1beta/openai
 host: 127.0.0.1
 temperature: 0.3
+thinking: medium
 max_memory_turns: 50
-base_url: https://api.deepseek.com

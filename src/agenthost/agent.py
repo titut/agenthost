@@ -55,15 +55,21 @@ class Agent:
         attempt = 0
         max_attempts = 5
         while True:
+            completion_kwargs: dict[str, Any] = {
+                "model": self.config.model,
+                "messages": messages,
+                "tools": self.tool_schemas or None,
+                "tool_choice": "auto" if self.tool_schemas else None,
+                "temperature": self.config.temperature,
+                "stream": True,
+            }
+            if self.config.max_tokens is not None:
+                completion_kwargs["max_tokens"] = self.config.max_tokens
+            if self.config.thinking is not None:
+                completion_kwargs["reasoning_effort"] = self.config.thinking
+
             try:
-                stream = await self.client.chat.completions.create(
-                    model=self.config.model,
-                    messages=messages,
-                    tools=self.tool_schemas or None,
-                    tool_choice="auto" if self.tool_schemas else None,
-                    temperature=self.config.temperature,
-                    stream=True,
-                )
+                stream = await self.client.chat.completions.create(**completion_kwargs)
             except Exception as exc:
                 attempt += 1
                 if attempt >= max_attempts:

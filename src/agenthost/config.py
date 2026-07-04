@@ -20,6 +20,8 @@ DEFAULT_CONFIG = {
     "temperature": 0.7,
     "max_memory_turns": 50,
     "base_url": None,
+    "max_tokens": None,
+    "thinking": None,
 }
 
 
@@ -33,6 +35,8 @@ class AgentConfig:
     temperature: float = DEFAULT_CONFIG["temperature"]
     max_memory_turns: int = DEFAULT_CONFIG["max_memory_turns"]
     base_url: str | None = DEFAULT_CONFIG["base_url"]
+    max_tokens: int | None = DEFAULT_CONFIG["max_tokens"]
+    thinking: str | None = DEFAULT_CONFIG["thinking"]
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -89,13 +93,17 @@ class AgentConfig:
         # The 'extra' block in agent.yaml is merged into the extra dict.
         explicit_extra = config.pop("extra", None) or {}
         extra = {k: v for k, v in config.items() if k not in {
-            "model", "host", "port", "temperature", "max_memory_turns", "base_url"
+            "model", "host", "port", "temperature", "max_memory_turns", "base_url",
+            "max_tokens", "thinking",
         }}
         extra.update(explicit_extra)
 
         # Port is now optional in config; keep backward compat with explicit values.
         port_value = config.get("port")
         port = int(port_value) if port_value is not None else None
+
+        max_tokens = config.get("max_tokens")
+        thinking = config.get("thinking")
 
         return cls(
             path=p,
@@ -106,5 +114,7 @@ class AgentConfig:
             temperature=float(config.get("temperature")),
             max_memory_turns=int(config.get("max_memory_turns")),
             base_url=config.get("base_url"),
+            max_tokens=int(max_tokens) if max_tokens is not None else None,
+            thinking=str(thinking) if thinking is not None else None,
             extra=extra,
         )

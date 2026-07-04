@@ -4,3 +4,6 @@ host: 127.0.0.1
 temperature: 0.4
 max_memory_turns: 50
 base_url: https://api.deepseek.com
+# Optional LLM parameters:
+# max_tokens: 4096
+# thinking: low   # maps to OpenAI's reasoning_effort (low/medium/high)
