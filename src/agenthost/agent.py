@@ -223,8 +223,36 @@ class Agent:
                 "content": f"[thread_id: {thread_id}] {history[-1]['content']}",
             }
 
-        messages.extend(self._merge_consecutive_messages(history))
+        cleaned_history = self._clean_tool_calls_for_api(history)
+        messages.extend(self._merge_consecutive_messages(cleaned_history))
         return messages
+
+    @staticmethod
+    def _clean_tool_calls_for_api(
+        history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Strip provider-specific extra fields from persisted tool_calls.
+
+        Gemini attaches fields like ``extra_content.google.thought_signature``
+        to tool-call deltas. These are useful for logging but are not part of
+        the OpenAI tool-call schema and will cause ``INVALID_ARGUMENT`` errors
+        if sent back to the API in the message history.
+        """
+        cleaned: list[dict[str, Any]] = []
+        for msg in history:
+            msg_copy = dict(msg)
+            tool_calls = msg_copy.get("tool_calls")
+            if tool_calls:
+                msg_copy["tool_calls"] = [
+                    {
+                        "id": tc.get("id", ""),
+                        "type": tc.get("type", "function"),
+                        "function": tc.get("function", {}),
+                    }
+                    for tc in tool_calls
+                ]
+            cleaned.append(msg_copy)
+        return cleaned
 
     @staticmethod
     def _parse_tool_arguments(arguments: str) -> dict[str, Any]:
