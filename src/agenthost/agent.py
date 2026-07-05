@@ -34,7 +34,7 @@ class Agent:
             self.client = AsyncOpenAI(**kwargs)
         self.memory = AgentMemory(config)
         builtins = make_builtin_tools(config, scheduler, agent_provider=lambda: self)
-        self.tool_schemas, self.tool_runner = discover_tools(config.tools_dir, builtins)
+        self.tool_schemas, self.tool_runner = discover_tools(config.tools_dir, builtins, config=config)
         self.system_prompt = config.system_prompt + build_builtin_tools_prompt(config)
 
     async def chat(self, thread_id: str, user_message: str) -> AsyncIterator[str]:
@@ -189,7 +189,9 @@ class Agent:
                     )
                     yield json.dumps({"type": "tool_start", "data": {"name": name, "arguments": args}}) + "\n"
                     try:
-                        result = await self.tool_runner.run(name, args)
+                        result = await self.tool_runner.run(
+                            name, args, thread_id=self._current_thread_id
+                        )
                     except Exception as exc:  # noqa: BLE001
                         logger.exception(
                             "Tool '%s' failed for agent '%s' thread '%s': %s",

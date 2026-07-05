@@ -1,10 +1,10 @@
 name: ORCHESTRATOR
-model: gemini-3.1-flash-lite
+model: gemini-3.5-flash
 base_url: https://generativelanguage.googleapis.com/v1beta/openai
 host: 127.0.0.1
 temperature: 0.3
 thinking: high
 max_memory_turns: 50
 extra:
-  builtin_tools: [events, datetime, discord]
+  builtin_tools: [events, discord]
   discord_bridge_url: http://127.0.0.1:9002/send

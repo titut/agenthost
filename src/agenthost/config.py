@@ -22,6 +22,7 @@ DEFAULT_CONFIG = {
     "base_url": None,
     "max_tokens": None,
     "thinking": None,
+    "summarizer_model": None,
 }
 
 
@@ -37,6 +38,7 @@ class AgentConfig:
     base_url: str | None = DEFAULT_CONFIG["base_url"]
     max_tokens: int | None = DEFAULT_CONFIG["max_tokens"]
     thinking: str | None = DEFAULT_CONFIG["thinking"]
+    summarizer_model: str | None = DEFAULT_CONFIG["summarizer_model"]
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -79,7 +81,11 @@ class AgentConfig:
             "single item or supports batch operations. Unless a tool is explicitly described "
             "as accepting multiple items in one call, make exactly one tool call per item. "
             "Provide all required arguments as a single valid JSON object. Do not concatenate "
-            "multiple JSON objects or multiple tool calls into one argument string."
+            "multiple JSON objects or multiple tool calls into one argument string.\n\n"
+            "Whenever a user question is time-sensitive (for example, it refers to 'now', "
+            "'today', 'current', 'latest', 'recent', a specific date, or a deadline), call "
+            "the `get_current_datetime` tool to obtain the current date and time before "
+            "answering. Do not guess the current date or time."
         )
 
         return "\n".join(parts)
@@ -103,7 +109,7 @@ class AgentConfig:
         explicit_extra = config.pop("extra", None) or {}
         extra = {k: v for k, v in config.items() if k not in {
             "model", "host", "port", "temperature", "max_memory_turns", "base_url",
-            "max_tokens", "thinking",
+            "max_tokens", "thinking", "summarizer_model",
         }}
         extra.update(explicit_extra)
 
@@ -113,6 +119,7 @@ class AgentConfig:
 
         max_tokens = config.get("max_tokens")
         thinking = config.get("thinking")
+        summarizer_model = config.get("summarizer_model")
 
         return cls(
             path=p,
@@ -125,5 +132,6 @@ class AgentConfig:
             base_url=config.get("base_url"),
             max_tokens=int(max_tokens) if max_tokens is not None else None,
             thinking=str(thinking) if thinking is not None else None,
+            summarizer_model=str(summarizer_model) if summarizer_model is not None else None,
             extra=extra,
         )

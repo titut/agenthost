@@ -380,18 +380,17 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
     if isinstance(enabled, str):
         enabled = [enabled]
 
-    descriptions: list[str] = []
+    descriptions: list[str] = [
+        "- `get_current_datetime()`: Return the current date and time. "
+        "Use this whenever the user asks about the current date, time, day, year, or any "
+        "time-sensitive question (e.g. involving 'now', 'today', 'latest', 'recent', or a deadline)."
+    ]
     if "events" in enabled or "event_tool" in enabled:
         descriptions.append(
             "- `event_tool(action, action_name, schedule_type, prompt, time, every, unit, at, enabled)`: "
             "Manage scheduled events in this agent's events.yaml. "
             "Actions: list, add, update, delete. "
             "Use this when the user asks to schedule, list, modify, or remove recurring tasks."
-        )
-    if "datetime" in enabled or "get_current_datetime" in enabled:
-        descriptions.append(
-            "- `get_current_datetime()`: Return the current date and time. "
-            "Use this whenever the user asks about the current date, time, day, or year."
         )
     if "discord" in enabled or "send_discord_message" in enabled:
         descriptions.append(
@@ -432,8 +431,6 @@ def make_builtin_tools(
     if isinstance(enabled, str):
         enabled = [enabled]
 
-    functions: dict[str, Callable[..., Any]] = {}
-
     # Build the full tool registry first.
     event_tools = EventTools(config, scheduler, agent_provider)
     datetime_tools = DateTimeTools()
@@ -444,6 +441,11 @@ def make_builtin_tools(
         "get_current_datetime": datetime_tools.get_current_datetime,
         "send_discord_message": discord_tools.send_discord_message,
         "get_current_thread_id": thread_tools.get_current_thread_id,
+    }
+
+    # get_current_datetime is enabled by default for every agent.
+    functions: dict[str, Callable[..., Any]] = {
+        "get_current_datetime": available["get_current_datetime"],
     }
 
     for item in enabled:
