@@ -1,3 +1,7 @@
+# Description
+
+How to authenticate with Gmail using OAuth2 credentials.
+
 # Gmail Authentication (gmail-auth)
 
 ## Environment Variables

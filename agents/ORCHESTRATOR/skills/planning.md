@@ -1,3 +1,7 @@
+# Description
+
+How to decompose requests into plans, assign agents, and execute step by step.
+
 # Planning & Execution Skill
 
 You are a generalist planning engine. Your job is to take any request, decompose
@@ -95,7 +99,8 @@ For each fine step, determine which agent is best suited. Do not assume based
 on names — read their actual descriptions.
 
 **Process:**
-1. Call `list_available_agents()` to see what agent folders exist.
+1. The `# Available Agents` section in your system prompt already lists every
+   agent you can delegate to. Use it to identify candidates.
 2. For each candidate, call `read_agent_folder("<name>")` to inspect the
    agent's persona, tools, and skills.
 3. Match the step's requirements to the agent's documented capabilities.

@@ -1,3 +1,7 @@
+# Description
+
+Workflow for web search, fetching results, and synthesizing findings.
+
 # Web Search & Fetch Skill
 
 Use this skill for any factual, current, or web-dependent question. Do not answer

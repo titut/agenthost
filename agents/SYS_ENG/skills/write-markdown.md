@@ -1,3 +1,7 @@
+# Description
+
+How and when to use the write_markdown tool for documentation.
+
 # Tools
 
 ## write_markdown

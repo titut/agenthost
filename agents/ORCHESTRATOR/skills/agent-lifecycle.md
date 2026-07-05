@@ -1,3 +1,7 @@
+# Description
+
+Operational basics for managing agent processes: spawn, message, despawn, and reuse.
+
 # Agent Lifecycle Guidance
 
 This skill covers the operational basics of managing agent processes.

@@ -5,6 +5,7 @@ The only exception is secrets (e.g. OPENAI_API_KEY), which are read from the env
 """
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ DEFAULT_CONFIG = {
     "max_tokens": None,
     "thinking": None,
     "summarizer_model": None,
+    "orchestrator": False,
 }
 
 
@@ -39,6 +41,7 @@ class AgentConfig:
     max_tokens: int | None = DEFAULT_CONFIG["max_tokens"]
     thinking: str | None = DEFAULT_CONFIG["thinking"]
     summarizer_model: str | None = DEFAULT_CONFIG["summarizer_model"]
+    orchestrator: bool = DEFAULT_CONFIG["orchestrator"]
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -88,7 +91,161 @@ class AgentConfig:
             "answering. Do not guess the current date or time."
         )
 
+        if self.orchestrator:
+            roster = self._build_agent_roster()
+            if roster:
+                parts.append(roster)
+
         return "\n".join(parts)
+
+    def _agent_description(self, agent_path: Path) -> str:
+        """Return a one-line description for an agent folder.
+
+        Reads the `# Description` section from WHOAMI.md. The description should
+        be a single concise sentence (150 characters max).
+        """
+        whoami = agent_path / "WHOAMI.md"
+        if not whoami.exists():
+            return "No description available."
+
+        text = whoami.read_text(encoding="utf-8")
+        in_description = False
+        lines: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.lower() in ("# description", "## description"):
+                in_description = True
+                continue
+            if in_description:
+                if stripped.startswith("#"):
+                    break
+                if stripped:
+                    lines.append(stripped)
+
+        description = " ".join(lines).strip()
+        if description:
+            sentence = description.split(". ")[0]
+            if len(sentence) > 150:
+                sentence = sentence[:147] + "..."
+            return sentence
+
+        return "No description available."
+
+    def _skill_description(self, skill_path: Path) -> str:
+        """Return the first sentence of the `# Description` section of a skill file."""
+        if not skill_path.exists():
+            return ""
+        text = skill_path.read_text(encoding="utf-8")
+        in_description = False
+        lines: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.lower() in ("# description", "## description"):
+                in_description = True
+                continue
+            if in_description:
+                if stripped.startswith("#"):
+                    break
+                if stripped:
+                    lines.append(stripped)
+        description = " ".join(lines).strip()
+        if description:
+            sentence = description.split(". ")[0]
+            if len(sentence) > 100:
+                sentence = sentence[:97] + "..."
+            return sentence
+        return ""
+
+    def _agent_skills(self, skills_dir: Path) -> list[tuple[str, str]]:
+        """Return a list of (skill_name, description) for an agent's skills."""
+        skills: list[tuple[str, str]] = []
+        if not skills_dir.is_dir():
+            return skills
+        for skill_path in sorted(skills_dir.glob("*.md")):
+            description = self._skill_description(skill_path)
+            skills.append((skill_path.stem, description))
+        return skills
+
+    def _agent_tools(self, tools_dir: Path) -> list[tuple[str, str]]:
+        """Return top-level tool function names and first-line docstrings.
+
+        Uses AST so tool modules are not imported and no side effects occur.
+        Methods inside classes are ignored.
+        """
+        tools: list[tuple[str, str]] = []
+        if not tools_dir.is_dir():
+            return tools
+        for file in sorted(tools_dir.glob("*.py")):
+            if file.name.startswith("_"):
+                continue
+            try:
+                source = file.read_text(encoding="utf-8")
+                tree = ast.parse(source)
+            except Exception:  # noqa: BLE001
+                continue
+            for node in tree.body:
+                if not isinstance(node, ast.FunctionDef):
+                    continue
+                name = node.name
+                if name.startswith("_"):
+                    continue
+                doc = ast.get_docstring(node) or ""
+                first_line = doc.split("\n")[0].strip()
+                if len(first_line) > 100:
+                    first_line = first_line[:97] + "..."
+                tools.append((name, first_line))
+        return tools
+
+    def _build_agent_roster(self) -> str:
+        """Build a roster of available agents for orchestrator agents."""
+        agents_dir = self.path.parent
+        if not agents_dir.is_dir():
+            return ""
+
+        entries: list[str] = []
+        for agent_path in sorted(agents_dir.iterdir()):
+            if not agent_path.is_dir():
+                continue
+            if agent_path.name == self.name:
+                continue
+            if not (agent_path / "WHOAMI.md").exists():
+                continue
+
+            description = self._agent_description(agent_path)
+            tools = self._agent_tools(agent_path / "tools")[:10]
+            skills = self._agent_skills(agent_path / "skills")
+
+            entry_lines: list[str] = [f"- `{agent_path.name}`: {description}"]
+
+            yaml_path = agent_path / "agent.yaml"
+            if yaml_path.exists():
+                try:
+                    cfg = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+                    model = cfg.get("model")
+                    if model:
+                        entry_lines.append(f"  - Model: `{model}`")
+                except Exception:  # noqa: BLE001
+                    pass
+
+            if tools:
+                tool_parts = [f"`{name}`" + (f" — {desc}" if desc else "") for name, desc in tools]
+                entry_lines.append("  - Tools: " + ", ".join(tool_parts))
+
+            if skills:
+                skill_parts = [f"`{name}`" + (f" — {desc}" if desc else "") for name, desc in skills]
+                entry_lines.append("  - Skills: " + ", ".join(skill_parts))
+
+            entries.append("\n".join(entry_lines))
+
+        if not entries:
+            return ""
+
+        return (
+            "\n\n# Available Agents\n\n"
+            "You can delegate work to the following agents. "
+            "Use `read_agent_folder(name)` for full details before spawning.\n\n"
+            + "\n\n".join(entries)
+        )
 
     @classmethod
     def from_path(cls, path: str | Path) -> "AgentConfig":
@@ -109,7 +266,7 @@ class AgentConfig:
         explicit_extra = config.pop("extra", None) or {}
         extra = {k: v for k, v in config.items() if k not in {
             "model", "host", "port", "temperature", "max_memory_turns", "base_url",
-            "max_tokens", "thinking", "summarizer_model",
+            "max_tokens", "thinking", "summarizer_model", "orchestrator",
         }}
         extra.update(explicit_extra)
 
@@ -120,6 +277,7 @@ class AgentConfig:
         max_tokens = config.get("max_tokens")
         thinking = config.get("thinking")
         summarizer_model = config.get("summarizer_model")
+        orchestrator = bool(config.get("orchestrator", False))
 
         return cls(
             path=p,
@@ -133,5 +291,6 @@ class AgentConfig:
             max_tokens=int(max_tokens) if max_tokens is not None else None,
             thinking=str(thinking) if thinking is not None else None,
             summarizer_model=str(summarizer_model) if summarizer_model is not None else None,
+            orchestrator=orchestrator,
             extra=extra,
         )

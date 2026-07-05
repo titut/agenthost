@@ -655,28 +655,3 @@ def plan_delete(key: str) -> str:
     except Exception as exc:
         return json.dumps({"error": f"Failed to delete plan: {exc}"})
 
-
-def list_available_agents() -> str:
-    """List all registered agents by running `agenthost agent list`.
-
-    Returns an array of agent names (aliases) that have a valid WHOAMI.md file.
-    """
-    agents = _run_agenthost_agent_list()
-    result: list[dict[str, object]] = []
-    for alias, path in sorted(agents.items()):
-        result.append(
-            {
-                "name": alias,
-                "path": str(path),
-                "has_tools": (path / "tools").is_dir(),
-                "has_skills": (path / "skills").is_dir(),
-            }
-        )
-
-    return json.dumps(
-        {
-            "count": len(result),
-            "agents": result,
-        },
-        indent=2,
-    )

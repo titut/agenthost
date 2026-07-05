@@ -5,6 +5,7 @@ host: 127.0.0.1
 temperature: 0.3
 thinking: high
 max_memory_turns: 50
+orchestrator: true
 extra:
   builtin_tools: [events, discord]
   discord_bridge_url: http://127.0.0.1:9002/send

@@ -1,3 +1,7 @@
+# Description
+
+Common patterns for writing, editing, and reviewing code in this project.
+
 # Development Patterns
 
 ## When to Create vs. Extend

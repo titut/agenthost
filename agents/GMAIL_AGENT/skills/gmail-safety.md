@@ -1,3 +1,7 @@
+# Description
+
+Safety rules for reading, sending, and modifying Gmail messages.
+
 # Gmail Safety Rules (gmail-safety)
 
 ## Golden Rules

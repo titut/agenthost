@@ -1,3 +1,7 @@
+# Description
+
+Gmail search query syntax and best practices.
+
 # Gmail Search Syntax (gmail-search)
 
 ## Overview
