@@ -16,9 +16,7 @@ Follow this exact loop:
    - The tool returns up to 5 results with `title`, `url`, and `snippet`.
 
 2. **Fetch all results**
-   - Call `fetch_url(url, query=...)` once for **every** URL returned.
-   - Pass the user's research question in the `query` parameter so the
-     summarizer focuses on relevant facts.
+   - Call `fetch_url(url)` once for **every** URL returned.
    - Do not skip results because the snippet looks sufficient.
 
 3. **Evaluate**
@@ -28,8 +26,7 @@ Follow this exact loop:
 4. **Refine and repeat (if needed)**
    - If information is missing, construct a new, more specific query.
    - Call `search_web` again.
-   - Fetch every result from the new search, passing the research question to
-     each `fetch_url` call.
+   - Fetch every result from the new search.
 
 5. **Stop conditions**
    - Stop when you have a complete, well-supported answer.

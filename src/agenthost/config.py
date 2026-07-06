@@ -23,7 +23,6 @@ DEFAULT_CONFIG = {
     "base_url": None,
     "max_tokens": None,
     "thinking": None,
-    "summarizer_model": None,
     "orchestrator": False,
 }
 
@@ -40,7 +39,6 @@ class AgentConfig:
     base_url: str | None = DEFAULT_CONFIG["base_url"]
     max_tokens: int | None = DEFAULT_CONFIG["max_tokens"]
     thinking: str | None = DEFAULT_CONFIG["thinking"]
-    summarizer_model: str | None = DEFAULT_CONFIG["summarizer_model"]
     orchestrator: bool = DEFAULT_CONFIG["orchestrator"]
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -266,7 +264,7 @@ class AgentConfig:
         explicit_extra = config.pop("extra", None) or {}
         extra = {k: v for k, v in config.items() if k not in {
             "model", "host", "port", "temperature", "max_memory_turns", "base_url",
-            "max_tokens", "thinking", "summarizer_model", "orchestrator",
+            "max_tokens", "thinking", "orchestrator",
         }}
         extra.update(explicit_extra)
 
@@ -276,7 +274,6 @@ class AgentConfig:
 
         max_tokens = config.get("max_tokens")
         thinking = config.get("thinking")
-        summarizer_model = config.get("summarizer_model")
         orchestrator = bool(config.get("orchestrator", False))
 
         return cls(
@@ -290,7 +287,6 @@ class AgentConfig:
             base_url=config.get("base_url"),
             max_tokens=int(max_tokens) if max_tokens is not None else None,
             thinking=str(thinking) if thinking is not None else None,
-            summarizer_model=str(summarizer_model) if summarizer_model is not None else None,
             orchestrator=orchestrator,
             extra=extra,
         )

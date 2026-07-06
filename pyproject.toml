@@ -14,6 +14,8 @@ dependencies = [
     "pykeepass>=4.1.0",
     "textual>=0.52.0",
     "apscheduler>=3.10.0",
+    "crawl4ai>=0.9.0",
+    "playwright>=1.49.0",
 ]
 
 [project.scripts]
