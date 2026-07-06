@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml
 
+from agenthost.agents_config import AgentsConfig
 from agenthost.skills import load_skills
 
 
@@ -195,16 +196,22 @@ class AgentConfig:
         return tools
 
     def _build_agent_roster(self) -> str:
-        """Build a roster of available agents for orchestrator agents."""
-        agents_dir = self.path.parent
-        if not agents_dir.is_dir():
+        """Build a roster of available agents for orchestrator agents.
+
+        Uses the agenthost agent list (agents.yaml aliases) rather than scanning
+        the parent directory, so agents registered anywhere on disk are included.
+        """
+        agents_config = AgentsConfig()
+        aliases = agents_config.list()
+        if not aliases:
             return ""
 
         entries: list[str] = []
-        for agent_path in sorted(agents_dir.iterdir()):
+        for alias, agent_path_str in sorted(aliases.items()):
+            agent_path = Path(agent_path_str).expanduser().resolve()
             if not agent_path.is_dir():
                 continue
-            if agent_path.name == self.name:
+            if agent_path == self.path:
                 continue
             if not (agent_path / "WHOAMI.md").exists():
                 continue
@@ -213,7 +220,7 @@ class AgentConfig:
             tools = self._agent_tools(agent_path / "tools")[:10]
             skills = self._agent_skills(agent_path / "skills")
 
-            entry_lines: list[str] = [f"- `{agent_path.name}`: {description}"]
+            entry_lines: list[str] = [f"- `{alias}`: {description}"]
 
             yaml_path = agent_path / "agent.yaml"
             if yaml_path.exists():
