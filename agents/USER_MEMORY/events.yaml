@@ -1,0 +1,25 @@
+timezone: UTC
+events:
+  - name: process_recent_messages
+    enabled: true
+    schedule:
+      type: interval
+      every: 30
+      unit: minutes
+    prompt: >
+      Read recent conversations from the monitored agents and update the memory
+      documents.
+
+      The daily log should capture a concise timeline of what the user did or
+      asked about during the period. After writing new daily log entries, index
+      them for semantic search so users can later ask questions like "what did I
+      work on yesterday?" via search_daily_logs().
+
+      The master memory document is reserved for the most important, enduring
+      information about the user. Only add or edit facts that are core to who
+      the user is: identity, long-term preferences, recurring goals, important
+      relationships, major projects, and deeply held opinions. Do not fill it
+      with transient questions, one-off tasks, or minor details that belong only
+      in the daily log.
+
+      Call process_recent_messages() to perform the update.

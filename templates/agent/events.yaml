@@ -1,0 +1,61 @@
+timezone: UTC
+events:
+  - name: interval_example
+    enabled: false
+    schedule:
+      type: interval
+      every: 30
+      unit: minutes
+    prompt: >
+      Runs every 30 minutes. Use interval for recurring background work.
+
+  - name: once_example
+    enabled: false
+    schedule:
+      type: once
+      at: "2026-07-07T09:00:00"
+    prompt: >
+      Runs once at the specified UTC datetime.
+
+  - name: daily_example
+    enabled: false
+    schedule:
+      type: daily
+      time: "09:00"
+    prompt: >
+      Runs every day at 09:00 UTC.
+
+  - name: weekdays_example
+    enabled: false
+    schedule:
+      type: weekdays
+      time: "09:00"
+    prompt: >
+      Runs Monday through Friday at 09:00 UTC.
+
+  - name: weekends_example
+    enabled: false
+    schedule:
+      type: weekends
+      time: "10:00"
+    prompt: >
+      Runs Saturday and Sunday at 10:00 UTC.
+
+  - name: specific_day_example
+    enabled: false
+    schedule:
+      type: monday
+      time: "09:00"
+    prompt: >
+      Runs every Monday at 09:00 UTC. Also valid: tuesday, wednesday, thursday,
+      friday, saturday, sunday.
+
+  - name: multiple_times_example
+    enabled: false
+    schedule:
+      type: daily
+      time:
+        - "09:00"
+        - "17:00"
+    prompt: >
+      Runs every day at both 09:00 and 17:00 UTC.

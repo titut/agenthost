@@ -258,7 +258,10 @@ class Agent:
                 "content": f"[thread_id: {thread_id}] {normalized_history[-1]['content']}",
             }
 
-        messages.extend(normalized_history)
+        for msg in normalized_history:
+            msg_copy = dict(msg)
+            msg_copy.pop("created_at", None)
+            messages.append(msg_copy)
         return messages
 
     @staticmethod
@@ -343,6 +346,7 @@ class Agent:
             if role == "user":
                 # Merge consecutive user messages.
                 merged_content = msg.get("content") or ""
+                merged_created_at = msg.get("created_at")
                 j = i + 1
                 while j < n and cleaned[j].get("role") == "user":
                     modified = True
@@ -350,8 +354,16 @@ class Agent:
                     if next_content:
                         separator = "\n\n" if merged_content else ""
                         merged_content = f"{merged_content}{separator}{next_content}".strip()
+                    next_created_at = cleaned[j].get("created_at")
+                    if next_created_at and (
+                        merged_created_at is None or next_created_at < merged_created_at
+                    ):
+                        merged_created_at = next_created_at
                     j += 1
-                result.append({"role": "user", "content": merged_content})
+                merged_msg = {"role": "user", "content": merged_content}
+                if merged_created_at:
+                    merged_msg["created_at"] = merged_created_at
+                result.append(merged_msg)
                 i = j
                 continue
 
@@ -367,6 +379,11 @@ class Agent:
                         if msg_content:
                             separator = "\n\n" if prev_content else ""
                             prev["content"] = f"{prev_content}{separator}{msg_content}".strip()
+                        msg_created_at = msg.get("created_at")
+                        if msg_created_at and (
+                            prev.get("created_at") is None or msg_created_at < prev["created_at"]
+                        ):
+                            prev["created_at"] = msg_created_at
                         i += 1
                         continue
                     # Otherwise skip this assistant message to preserve ordering.

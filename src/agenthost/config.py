@@ -183,7 +183,7 @@ class AgentConfig:
             except Exception:  # noqa: BLE001
                 continue
             for node in tree.body:
-                if not isinstance(node, ast.FunctionDef):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
                 name = node.name
                 if name.startswith("_"):

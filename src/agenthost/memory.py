@@ -5,6 +5,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -44,6 +45,7 @@ class AgentMemory:
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
+                CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
 
                 CREATE TABLE IF NOT EXISTS kv (
                     key TEXT PRIMARY KEY,
@@ -57,14 +59,14 @@ class AgentMemory:
     def get_messages(self, thread_id: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT role, content, tool_calls, tool_call_id, name FROM messages "
+                "SELECT role, content, tool_calls, tool_call_id, name, created_at FROM messages "
                 "WHERE thread_id = ? ORDER BY id",
                 (thread_id,),
             ).fetchall()
 
         messages: list[dict[str, Any]] = []
         for row in rows:
-            msg: dict[str, Any] = {"role": row["role"]}
+            msg: dict[str, Any] = {"role": row["role"], "created_at": row["created_at"]}
             if row["tool_calls"]:
                 msg["tool_calls"] = json.loads(row["tool_calls"])
             if row["tool_call_id"]:
@@ -157,10 +159,11 @@ class AgentMemory:
 
     def append_message(self, thread_id: str, message: dict[str, Any]) -> None:
         tool_calls = json.dumps(message.get("tool_calls")) if message.get("tool_calls") else None
+        created_at = message.get("created_at") or datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO messages (thread_id, role, content, tool_calls, tool_call_id, name) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO messages (thread_id, role, content, tool_calls, tool_call_id, name, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     thread_id,
                     message["role"],
@@ -168,6 +171,7 @@ class AgentMemory:
                     tool_calls,
                     message.get("tool_call_id"),
                     message.get("name"),
+                    created_at,
                 ),
             )
             conn.commit()
@@ -225,9 +229,10 @@ class AgentMemory:
             conn.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
             for msg in messages:
                 tool_calls = json.dumps(msg.get("tool_calls")) if msg.get("tool_calls") else None
+                created_at = msg.get("created_at") or datetime.now(timezone.utc).isoformat()
                 conn.execute(
-                    "INSERT INTO messages (thread_id, role, content, tool_calls, tool_call_id, name) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO messages (thread_id, role, content, tool_calls, tool_call_id, name, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         thread_id,
                         msg["role"],
@@ -235,6 +240,7 @@ class AgentMemory:
                         tool_calls,
                         msg.get("tool_call_id"),
                         msg.get("name"),
+                        created_at,
                     ),
                 )
             conn.commit()
