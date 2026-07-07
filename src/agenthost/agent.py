@@ -120,6 +120,10 @@ class Agent:
             finish_reason: str | None = None
 
             async for chunk in stream:
+                # Some providers (e.g. DeepSeek via DeepInfra) emit chunks with an
+                # empty choices list as keep-alives or final markers. Skip them.
+                if not chunk.choices:
+                    continue
                 delta = chunk.choices[0].delta
                 finish_reason = chunk.choices[0].finish_reason or finish_reason
 
