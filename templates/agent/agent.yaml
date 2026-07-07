@@ -1,0 +1,14 @@
+name: EXAMPLE_AGENT
+model: gpt-4o-mini
+host: 127.0.0.1
+port: 8000
+temperature: 0.7
+max_memory_turns: 50
+max_tokens: null
+base_url: null
+thinking: null
+orchestrator: false
+extra:
+  # Add any agent-specific configuration here. Tools can read these values
+  # through the current agent config at runtime.
+  example_setting: true

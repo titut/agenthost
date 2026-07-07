@@ -1,11 +1,11 @@
 name: USER_MEMORY
-model: gemini-3.1-flash-lite
+model: deepseek-ai/DeepSeek-V4-Flash
+base_url: https://api.deepinfra.com/v1/openai
 host: 127.0.0.1
 temperature: 0.3
 max_memory_turns: 50
 thinking: medium
 extra:
   monitored_agents:
-    - RESEARCHER
-    - TODO
-  embedding_model: text-embedding-004
+    - ORCHESTRATOR
+  embedding_model: nvidia/llama-nemotron-embed-vl-1b-v2
