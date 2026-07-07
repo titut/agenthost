@@ -151,7 +151,7 @@ def _stream_turn(
 
     new_thread_id: str | None = thread_id
     try:
-        with httpx.stream("POST", url, json=payload, timeout=600.0) as response:
+        with httpx.stream("POST", url, json=payload, timeout=1800.0) as response:
             response.raise_for_status()
             current_event: str | None = None
             for line in response.iter_lines():

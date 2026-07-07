@@ -414,7 +414,7 @@ def send_message(agent_id: str, message: str) -> str:
 
     try:
         response_text = ""
-        with httpx.stream("POST", chat_url, json=payload, timeout=600.0) as resp:
+        with httpx.stream("POST", chat_url, json=payload, timeout=1800.0) as resp:
             resp.raise_for_status()
             current_event = None
             for line in resp.iter_lines():

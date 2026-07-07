@@ -179,7 +179,6 @@ async def _summarize_with_llm(config: AgentConfig, prompt: str) -> str:
             ],
             temperature=0.3,
             max_tokens=2048,
-            service_tier="priority",
         )
         return response.choices[0].message.content or ""
     except Exception as exc:  # noqa: BLE001
