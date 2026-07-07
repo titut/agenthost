@@ -5,9 +5,9 @@ from __future__ import annotations
 from agenthost.tools import current_thread_id
 
 # Per-thread set of URLs already fetched by the RESEARCHER agent. This enforces
-# the 50-website research limit regardless of which model is running the agent.
+# the 20-website research limit regardless of which model is running the agent.
 _RESEARCHER_VISITED_URLS: dict[str, set[str]] = {}
-_RESEARCHER_WEBSITE_LIMIT = 50
+_RESEARCHER_WEBSITE_LIMIT = 20
 
 DEFAULT_MAX_CHARS = 10_000
 
@@ -52,7 +52,7 @@ async def fetch_url(
             return {
                 "error": (
                     f"Research website limit reached ({_RESEARCHER_WEBSITE_LIMIT} unique URLs). "
-                    "Stop and tell the user you have looked through 50 websites. "
+                    "Stop and tell the user you have looked through 20 websites. "
                     "Only continue if the user explicitly asks you to."
                 ),
                 "urls_fetched": current_count,

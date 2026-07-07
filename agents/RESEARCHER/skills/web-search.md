@@ -15,23 +15,25 @@ Follow this exact loop:
    - Call `search_web(query)` with a focused query.
    - The tool returns up to 5 results with `title`, `url`, and `snippet`.
 
-2. **Fetch all results**
-   - Call `fetch_url(url)` once for **every** URL returned.
-   - Do not skip results because the snippet looks sufficient.
+2. **Evaluate before fetching**
+   - Read the snippets carefully.
+   - If the snippets already give you enough information to answer the user's
+     question, **stop and answer**. Do not fetch URLs just because they exist.
 
-3. **Evaluate**
-   - Read the fetched content.
-   - Decide whether you have enough information to answer the user's question.
+3. **Fetch only what you need**
+   - Call `fetch_url(url)` only for URLs that are likely to fill a specific gap.
+   - Do not fetch every result by default.
+   - After each fetch, re-evaluate: "Can I answer now?" If yes, stop.
 
-4. **Refine and repeat (if needed)**
-   - If information is missing, construct a new, more specific query.
+4. **Refine and repeat (only if still missing information)**
+   - If information is still missing, construct a new, more specific query.
    - Call `search_web` again.
-   - Fetch every result from the new search.
+   - Fetch only the results needed to close the gap.
 
 5. **Stop conditions**
-   - Stop when you have a complete, well-supported answer.
-   - Stop when you have fetched **50 unique websites** total.
-   - If you hit the 50-website limit, report what you found, explain the gap,
+   - Stop as soon as you have a complete, well-supported answer.
+   - Stop when you have fetched **20 unique websites** total.
+   - If you hit the 20-website limit, report what you found, explain the gap,
      and ask the user if you should continue.
 
 ## Counting Websites
@@ -44,7 +46,7 @@ Fetched so far: N
 This fetch will make it: N+1
 ```
 
-If `N+1 > 50`, do not fetch. Stop and ask the user.
+If `N+1 > 20`, do not fetch. Stop and ask the user.
 
 ## Query Refinement
 
