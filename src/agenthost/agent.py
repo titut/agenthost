@@ -71,6 +71,7 @@ class Agent:
                 "tool_choice": "auto" if self.tool_schemas else None,
                 "temperature": self.config.temperature,
                 "stream": True,
+                "service_tier": "priority",
             }
             if self.config.max_tokens is not None:
                 completion_kwargs["max_tokens"] = self.config.max_tokens
