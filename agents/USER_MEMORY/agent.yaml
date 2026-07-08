@@ -3,7 +3,7 @@ model: deepseek-ai/DeepSeek-V4-Flash
 base_url: https://api.deepinfra.com/v1/openai
 host: 127.0.0.1
 temperature: 0.3
-max_memory_turns: 50
+max_memory_tokens: 25000
 thinking: medium
 extra:
   monitored_agents:

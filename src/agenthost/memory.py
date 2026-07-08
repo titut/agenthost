@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from agenthost.config import AgentConfig
+from agenthost.config import AgentConfig, _estimate_tokens
 
 
 class AgentMemory:
@@ -178,17 +178,80 @@ class AgentMemory:
         self._trim_messages(thread_id)
 
     def _trim_messages(self, thread_id: str) -> None:
-        """Keep only the most recent max_memory_turns."""
+        """Keep only the most recent messages that fit the memory budget.
+
+        The primary budget is ``max_memory_tokens``. When it is set, messages are
+        removed from the oldest end until the remaining suffix fits within the
+        token budget. Cuts only happen at user-message boundaries so tool-call
+        groups stay intact.
+
+        If ``max_memory_turns`` is also set, it acts as a secondary cap on the
+        number of messages kept.
+        """
+        max_tokens = self.config.max_memory_tokens
         max_turns = self.config.max_memory_turns
-        if max_turns <= 0:
+        if max_tokens <= 0 and max_turns <= 0:
             return
+
         with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, role, content, tool_calls, tool_call_id, name FROM messages "
+                "WHERE thread_id = ? ORDER BY id",
+                (thread_id,),
+            ).fetchall()
+
+        if not rows:
+            return
+
+        # Build lightweight message dicts for token estimation.
+        messages: list[dict[str, Any]] = []
+        for row in rows:
+            msg: dict[str, Any] = {"role": row["role"]}
+            if row["tool_calls"]:
+                msg["tool_calls"] = json.loads(row["tool_calls"])
+            if row["tool_call_id"]:
+                msg["tool_call_id"] = row["tool_call_id"]
+            if row["name"]:
+                msg["name"] = row["name"]
+            if row["content"]:
+                msg["content"] = row["content"]
+            messages.append(msg)
+
+        n = len(messages)
+        token_counts = [_estimate_tokens([msg], self.config.model) for msg in messages]
+        prefix = [0]
+        for count in token_counts:
+            prefix.append(prefix[-1] + count)
+
+        # Turn-based cut index.
+        turn_cut = 0
+        if max_turns > 0:
+            turn_cut = max(0, n - max_turns)
+
+        token_cut = n
+        if max_tokens > 0:
+            for i in range(n - 1, -1, -1):
+                if messages[i].get("role") != "user":
+                    continue
+                suffix_tokens = prefix[n] - prefix[i]
+                if suffix_tokens <= max_tokens:
+                    token_cut = i
+            if token_cut == n:
+                for i in range(n - 1, -1, -1):
+                    if messages[i].get("role") == "user":
+                        token_cut = i
+                        break
+
+        cut = max(turn_cut, token_cut)
+        if cut <= 0:
+            return
+
+        ids_to_delete = [row["id"] for row in rows[:cut]]
+        with self._connect() as conn:
+            placeholders = ",".join("?" * len(ids_to_delete))
             conn.execute(
-                "DELETE FROM messages WHERE id IN ("
-                "SELECT id FROM messages WHERE thread_id = ? "
-                "ORDER BY id DESC LIMIT -1 OFFSET ?"
-                ")",
-                (thread_id, max_turns),
+                f"DELETE FROM messages WHERE id IN ({placeholders})",
+                tuple(ids_to_delete),
             )
             conn.commit()
 

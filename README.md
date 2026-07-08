@@ -420,7 +420,7 @@ max_tokens: 2048         # Optional: cap LLM output tokens
 frequency_penalty: 0.0   # Optional: penalize repeated tokens (-2.0 to 2.0)
 presence_penalty: 0.0    # Optional: penalize repeated topics (-2.0 to 2.0)
 thinking: high           # Optional: reasoning effort for supported models
-max_memory_turns: 50
+max_memory_tokens: 25000 # Memory budget for conversation history (estimated tokens)
 port: 8000               # Optional: pin a specific port
 ```
 
@@ -435,7 +435,8 @@ port: 8000               # Optional: pin a specific port
 | `frequency_penalty` | `None`               | Penalize repeated tokens (-2.0 to 2.0)             |
 | `presence_penalty`  | `None`               | Penalize repeated topics (-2.0 to 2.0)             |
 | `thinking`          | `None`               | Reasoning effort for supported models (e.g., `high`) |
-| `max_memory_turns`  | `50`                 | Max conversation turns kept in memory (0 = unlimited) |
+| `max_memory_tokens` | `25000`              | Estimated-token budget for loaded conversation history |
+| `max_memory_turns`  | `0`                  | Hard cap on number of messages kept (0 = unlimited)    |
 | `port`              | `auto`               | Explicit TCP port (auto-assigned from 8000 if omitted) |
 
 Any extra fields in `agent.yaml` are stored in `config.extra` and can be read by custom tool code.
@@ -459,7 +460,7 @@ Each agent gets an auto-created SQLite database at `memory/memory.db` with two t
 | `name`        | TEXT    | Tool name (for tool role messages)            |
 | `created_at`  | DATETIME| Auto-set timestamp                            |
 
-Messages are automatically trimmed to `max_memory_turns` (configurable in `agent.yaml`) by removing the oldest entries when the limit is exceeded.
+Messages are automatically trimmed by estimated tokens. The agent loads only the most recent suffix of the conversation that fits within `max_memory_tokens` (default `25000`), walking backward from the latest message and cutting only at user-message boundaries so assistant tool-call groups stay intact. If `max_memory_turns` is set, it acts as a hard message-count cap on top of the token budget.
 
 ### `kv` — Key/Value Store
 

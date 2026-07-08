@@ -6,7 +6,7 @@ temperature: 0.4
 frequency_penalty: 0.7
 presence_penalty: 0.6
 thinking: high
-max_memory_turns: 50
+max_memory_tokens: 25000
 orchestrator: true
 extra:
   builtin_tools: [events, discord]

@@ -8,38 +8,13 @@ from typing import Any, AsyncIterator
 from openai import AsyncOpenAI, BadRequestError
 
 from agenthost.builtin_tools import build_builtin_tools_prompt, make_builtin_tools
-from agenthost.config import AgentConfig
+from agenthost.config import AgentConfig, _estimate_tokens
 from agenthost.logger import setup_logging
 from agenthost.memory import AgentMemory
 from agenthost.tools import ToolRunner, discover_tools
 
 
 logger = setup_logging("agenthost.agent")
-
-
-def _estimate_tokens(messages: list[dict[str, Any]], model: str) -> int:
-    """Return a rough token estimate for the messages payload.
-
-    Uses tiktoken if available, otherwise falls back to a characters-per-token
-    heuristic. This is intentionally approximate — it is only for logging and
-    debugging context-length issues.
-    """
-    text = json.dumps(messages, default=str)
-
-    try:
-        import tiktoken
-
-        try:
-            encoding = tiktoken.encoding_for_model(model)
-        except KeyError:
-            # Unknown model name; use the cl100k_base encoding as a reasonable
-            # fallback for modern OpenAI-compatible models.
-            encoding = tiktoken.get_encoding("cl100k_base")
-        return len(encoding.encode(text))
-    except Exception:  # noqa: BLE001
-        # tiktoken not installed or unusable; fall back to a rough heuristic.
-        # English averages ~4 characters per token; add a small overhead factor.
-        return int(len(text) / 4) + len(messages) * 2
 
 
 class Agent:
@@ -348,6 +323,11 @@ class Agent:
         if was_modified:
             self.memory.rewrite_thread(thread_id, normalized_history)
 
+        # Trim from the latest message backward so the loaded conversation stays
+        # within the configured token budget. Cuts happen only at user-message
+        # boundaries so assistant tool_call + tool response groups stay intact.
+        normalized_history = self._trim_history_by_tokens(normalized_history, thread_id)
+
         # Prepend the thread_id to the latest user message so the agent always
         # knows which conversation it is in. This is needed for tools like
         # send_discord_message that must target the same channel/thread.
@@ -364,6 +344,68 @@ class Agent:
             msg_copy.pop("created_at", None)
             messages.append(msg_copy)
         return messages
+
+    def _trim_history_by_tokens(
+        self, history: list[dict[str, Any]], thread_id: str
+    ) -> list[dict[str, Any]]:
+        """Return the most recent suffix of history that fits in the token budget.
+
+        Walks backward from the latest message and accumulates token estimates
+        until ``max_memory_tokens`` would be exceeded. Cuts are only made at
+        user-message boundaries so that an assistant ``tool_calls`` message and
+        its matching tool responses are never split.
+
+        If ``max_memory_turns`` is also set, the result is further capped to that
+        many messages.
+        """
+        max_tokens = self.config.max_memory_tokens
+        max_turns = self.config.max_memory_turns
+        if max_tokens <= 0 and max_turns <= 0:
+            return history
+
+        n = len(history)
+        token_counts = [_estimate_tokens([msg], self.config.model) for msg in history]
+        prefix = [0]
+        for count in token_counts:
+            prefix.append(prefix[-1] + count)
+
+        # Turn-based cut (keep the most recent max_turns messages).
+        turn_cut = 0
+        if max_turns > 0:
+            turn_cut = max(0, n - max_turns)
+
+        if max_tokens <= 0:
+            return history[turn_cut:]
+
+        # Token-based cut: find the earliest user-message index whose suffix
+        # fits within the budget. Iterating backward and updating the cut index
+        # whenever a suffix fits keeps the maximum number of recent messages.
+        token_cut = n
+        for i in range(n - 1, -1, -1):
+            if history[i].get("role") != "user":
+                continue
+            suffix_tokens = prefix[n] - prefix[i]
+            if suffix_tokens <= max_tokens:
+                token_cut = i
+        if token_cut == n:
+            # No user-message suffix fits the budget; keep at least the latest
+            # user message so the conversation isn't completely empty.
+            for i in range(n - 1, -1, -1):
+                if history[i].get("role") == "user":
+                    token_cut = i
+                    break
+
+        cut = max(turn_cut, token_cut)
+        if cut > 0:
+            logger.debug(
+                "Trimmed thread '%s' history: kept %d/%d messages (~%d/%d tokens)",
+                thread_id,
+                n - cut,
+                n,
+                prefix[n] - prefix[cut],
+                prefix[n],
+            )
+        return history[cut:]
 
     @staticmethod
     def _normalize_messages(

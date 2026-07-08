@@ -6,6 +6,7 @@ The only exception is secrets (e.g. OPENAI_API_KEY), which are read from the env
 from __future__ import annotations
 
 import ast
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,8 @@ DEFAULT_CONFIG = {
     "model": "gpt-4o-mini",
     "host": "127.0.0.1",
     "temperature": 0.7,
-    "max_memory_turns": 50,
+    "max_memory_turns": 0,
+    "max_memory_tokens": 25000,
     "base_url": None,
     "max_tokens": None,
     "thinking": None,
@@ -28,6 +30,31 @@ DEFAULT_CONFIG = {
     "frequency_penalty": None,
     "presence_penalty": None,
 }
+
+
+def _estimate_tokens(messages: list[dict[str, Any]], model: str) -> int:
+    """Return a rough token estimate for the messages payload.
+
+    Uses tiktoken if available, otherwise falls back to a characters-per-token
+    heuristic. This is intentionally approximate — it is only for logging and
+    debugging context-length issues.
+    """
+    text = json.dumps(messages, default=str)
+
+    try:
+        import tiktoken
+
+        try:
+            encoding = tiktoken.encoding_for_model(model)
+        except KeyError:
+            # Unknown model name; use the cl100k_base encoding as a reasonable
+            # fallback for modern OpenAI-compatible models.
+            encoding = tiktoken.get_encoding("cl100k_base")
+        return len(encoding.encode(text))
+    except Exception:  # noqa: BLE001
+        # tiktoken not installed or unusable; fall back to a rough heuristic.
+        # English averages ~4 characters per token; add a small overhead factor.
+        return int(len(text) / 4) + len(messages) * 2
 
 
 @dataclass
@@ -39,6 +66,7 @@ class AgentConfig:
     port: int | None = None
     temperature: float = DEFAULT_CONFIG["temperature"]
     max_memory_turns: int = DEFAULT_CONFIG["max_memory_turns"]
+    max_memory_tokens: int = DEFAULT_CONFIG["max_memory_tokens"]
     base_url: str | None = DEFAULT_CONFIG["base_url"]
     max_tokens: int | None = DEFAULT_CONFIG["max_tokens"]
     thinking: str | None = DEFAULT_CONFIG["thinking"]
@@ -277,8 +305,9 @@ class AgentConfig:
         # The 'extra' block in agent.yaml is merged into the extra dict.
         explicit_extra = config.pop("extra", None) or {}
         extra = {k: v for k, v in config.items() if k not in {
-            "model", "host", "port", "temperature", "max_memory_turns", "base_url",
-            "max_tokens", "thinking", "frequency_penalty", "presence_penalty", "orchestrator",
+            "model", "host", "port", "temperature", "max_memory_turns", "max_memory_tokens",
+            "base_url", "max_tokens", "thinking", "frequency_penalty", "presence_penalty",
+            "orchestrator",
         }}
         extra.update(explicit_extra)
 
@@ -300,6 +329,7 @@ class AgentConfig:
             port=port,
             temperature=float(config.get("temperature")),
             max_memory_turns=int(config.get("max_memory_turns")),
+            max_memory_tokens=int(config.get("max_memory_tokens")),
             base_url=config.get("base_url"),
             max_tokens=int(max_tokens) if max_tokens is not None else None,
             thinking=str(thinking) if thinking is not None else None,

@@ -2,7 +2,7 @@ name: SW_DEV
 model: deepseek-v4-flash
 host: 127.0.0.1
 temperature: 0.4
-max_memory_turns: 50
+max_memory_tokens: 25000
 base_url: https://api.deepseek.com
 # Optional LLM parameters:
 # max_tokens: 4096

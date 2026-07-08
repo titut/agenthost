@@ -4,4 +4,4 @@ base_url: https://api.deepinfra.com/v1/openai
 host: 127.0.0.1
 temperature: 0.3
 thinking: medium
-max_memory_turns: 50
+max_memory_tokens: 25000
