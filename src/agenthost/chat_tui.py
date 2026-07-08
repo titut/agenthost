@@ -266,6 +266,33 @@ class ToolResultCard(Collapsible):
         yield Static(text, markup=False)
 
 
+class ThinkingCard(Collapsible):
+    """Collapsible card showing the model's reasoning / thinking content."""
+
+    DEFAULT_CSS = """
+    ThinkingCard {
+        width: 100%;
+        margin: 0 2 1 2;
+    }
+    """
+
+    content = reactive("")
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(title="🧠 thinking", collapsed=True, **kwargs)
+
+    def compose(self) -> ComposeResult:
+        yield Static("", markup=False)
+
+    def watch_content(self, content: str) -> None:
+        try:
+            static = self.query_one(Static)
+        except NoMatches:
+            return
+        static.update(content)
+        self.refresh(layout=True)
+
+
 # ---------------------------------------------------------------------------
 # Context panel
 # ---------------------------------------------------------------------------
@@ -728,6 +755,7 @@ class ChatApp(App):
         self.thread_id = thread_id
         self._client = httpx.AsyncClient(timeout=600.0)
         self._current_assistant: AssistantMessage | None = None
+        self._current_thinking: ThinkingCard | None = None
         self._current_tool: ToolCallCard | None = None
         self._stream_task: asyncio.Task | None = None
         self._stream_id: int = 0
@@ -772,8 +800,12 @@ class ChatApp(App):
         augmented, attachments = _parse_context_mentions(text)
         self.context_panel.set_attachments(attachments)
 
-        self._current_assistant = AssistantMessage()
-        await self.chat_scroll.mount(self._current_assistant)
+        # Start fresh state for the new assistant turn. Widgets are created lazily
+        # when their first event arrives so that thinking cards appear before
+        # content bubbles.
+        self._current_assistant = None
+        self._current_thinking = None
+        self._current_tool = None
         self._set_status("Streaming…")
         self._stream_id += 1
         self._stream_task = self._stream_response(augmented, self._stream_id)
@@ -816,6 +848,8 @@ class ChatApp(App):
         self.context_panel.touched.clear()
         self.context_panel.update_content()
         self._current_assistant = None
+        self._current_thinking = None
+        self._current_tool = None
 
         # Start a fresh thread.
         self.thread_id = uuid.uuid4().hex
@@ -879,6 +913,8 @@ class ChatApp(App):
         self.context_panel.touched.clear()
         self.context_panel.update_content()
         self._current_assistant = None
+        self._current_thinking = None
+        self._current_tool = None
 
         # Render the conversation history.
         for msg in messages:
@@ -945,6 +981,11 @@ class ChatApp(App):
                         self.call_next(
                             self._handle_message_event_with_id, stream_id, event
                         )
+                    elif current_event == "thinking":
+                        event = json.loads(data_part)
+                        self.call_next(
+                            self._handle_message_event_with_id, stream_id, event
+                        )
                     elif current_event == "heartbeat":
                         # Keep-alive event; keeps the HTTP read timeout from firing
                         # during long tool calls.
@@ -976,7 +1017,14 @@ class ChatApp(App):
         event_type = event.get("type")
         event_data = event.get("data")
 
-        if event_type == "content":
+        if event_type == "thinking":
+            if self._current_thinking is None:
+                self._current_thinking = ThinkingCard()
+                await self.chat_scroll.mount(self._current_thinking)
+            self._current_thinking.content += event_data
+            self.chat_scroll.scroll_end(animate=False)
+
+        elif event_type == "content":
             if self._current_assistant is None:
                 self._current_assistant = AssistantMessage()
                 await self.chat_scroll.mount(self._current_assistant)
@@ -987,6 +1035,7 @@ class ChatApp(App):
             # Subsequent assistant content belongs in a new message bubble
             # that appears after the tool cards.
             self._current_assistant = None
+            self._current_thinking = None
             name = event_data.get("name", "tool")
             arguments = event_data.get("arguments", {})
             self._current_tool = ToolCallCard(name, arguments)
@@ -1009,6 +1058,7 @@ class ChatApp(App):
 
         elif event_type == "error":
             self._current_assistant = None
+            self._current_thinking = None
             error = event_data if isinstance(event_data, str) else str(event_data)
             card = ToolResultCard("agent", f"ERROR: {error}")
             await self.chat_scroll.mount(card)

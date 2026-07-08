@@ -17,9 +17,9 @@ from agenthost.home import ensure_agenthost_home
 
 LOG_FILE_NAME = "agenthost.log"
 
-# Enable verbose debug output (including full LLM request/response payloads)
-# by setting AGENTHOST_DEBUG=1 in the environment.
-DEBUG_MODE = os.environ.get("AGENTHOST_DEBUG", "").lower() in ("1", "true", "yes")
+# Debug output (including full LLM request/response payloads) is now enabled
+# permanently. Set AGENTHOST_DEBUG=0 to disable it.
+DEBUG_MODE = os.environ.get("AGENTHOST_DEBUG", "1").lower() not in ("0", "false", "no", "off")
 
 
 def get_log_file_path() -> Path:

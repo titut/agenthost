@@ -17,6 +17,31 @@ from agenthost.tools import ToolRunner, discover_tools
 logger = setup_logging("agenthost.agent")
 
 
+def _estimate_tokens(messages: list[dict[str, Any]], model: str) -> int:
+    """Return a rough token estimate for the messages payload.
+
+    Uses tiktoken if available, otherwise falls back to a characters-per-token
+    heuristic. This is intentionally approximate — it is only for logging and
+    debugging context-length issues.
+    """
+    text = json.dumps(messages, default=str)
+
+    try:
+        import tiktoken
+
+        try:
+            encoding = tiktoken.encoding_for_model(model)
+        except KeyError:
+            # Unknown model name; use the cl100k_base encoding as a reasonable
+            # fallback for modern OpenAI-compatible models.
+            encoding = tiktoken.get_encoding("cl100k_base")
+        return len(encoding.encode(text))
+    except Exception:  # noqa: BLE001
+        # tiktoken not installed or unusable; fall back to a rough heuristic.
+        # English averages ~4 characters per token; add a small overhead factor.
+        return int(len(text) / 4) + len(messages) * 2
+
+
 class Agent:
     def __init__(
         self,
@@ -76,10 +101,16 @@ class Agent:
                 completion_kwargs["max_tokens"] = self.config.max_tokens
             if self.config.thinking is not None:
                 completion_kwargs["reasoning_effort"] = self.config.thinking
+            if self.config.frequency_penalty is not None:
+                completion_kwargs["frequency_penalty"] = self.config.frequency_penalty
 
+            estimated_tokens = _estimate_tokens(
+                completion_kwargs["messages"], completion_kwargs["model"]
+            )
             logger.debug(
-                "LLM request for thread '%s': %s",
+                "LLM request for thread '%s' (~%d tokens): %s",
                 thread_id,
+                estimated_tokens,
                 json.dumps(completion_kwargs, default=str),
             )
 
@@ -122,8 +153,11 @@ class Agent:
                 continue
 
             assistant_content = ""
+            thinking_content = ""
             tool_calls: list[dict[str, Any]] = []
             finish_reason: str | None = None
+            in_think_tag = False
+            think_buffer = ""
 
             try:
                 async for chunk in stream:
@@ -134,9 +168,57 @@ class Agent:
                     delta = chunk.choices[0].delta
                     finish_reason = chunk.choices[0].finish_reason or finish_reason
 
+                    # Emit reasoning/thinking content from provider-specific fields.
+                    reasoning = getattr(delta, "reasoning_content", None)
+                    if not reasoning:
+                        extra = getattr(delta, "model_extra", None) or {}
+                        reasoning = extra.get("reasoning_content")
+                    if reasoning:
+                        thinking_content += reasoning
+                        yield json.dumps({"type": "thinking", "data": reasoning}) + "\n"
+
                     if delta.content:
-                        assistant_content += delta.content
-                        yield json.dumps({"type": "content", "data": delta.content}) + "\n"
+                        raw = delta.content
+                        # Handle <think>...</think> reasoning blocks that may span chunks.
+                        while raw:
+                            if in_think_tag:
+                                end = raw.find("</think>")
+                                if end == -1:
+                                    think_buffer += raw
+                                    raw = ""
+                                    continue
+                                think_buffer += raw[:end]
+                                if think_buffer:
+                                    thinking_content += think_buffer
+                                    yield json.dumps({"type": "thinking", "data": think_buffer}) + "\n"
+                                think_buffer = ""
+                                in_think_tag = False
+                                raw = raw[end + len("</think>"):]
+                                continue
+
+                            start = raw.find("<think>")
+                            if start == -1:
+                                break
+                            before = raw[:start]
+                            if before:
+                                assistant_content += before
+                                yield json.dumps({"type": "content", "data": before}) + "\n"
+                            raw = raw[start + len("<think>"):]
+                            end = raw.find("</think>")
+                            if end == -1:
+                                think_buffer = raw
+                                in_think_tag = True
+                                raw = ""
+                            else:
+                                thinking = raw[:end]
+                                if thinking:
+                                    thinking_content += thinking
+                                    yield json.dumps({"type": "thinking", "data": thinking}) + "\n"
+                                raw = raw[end + len("</think>"):]
+
+                        if raw:
+                            assistant_content += raw
+                            yield json.dumps({"type": "content", "data": raw}) + "\n"
 
                     if delta.tool_calls:
                         for tc in delta.tool_calls:
