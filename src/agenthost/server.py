@@ -147,6 +147,13 @@ def build_app(agent: Agent, scheduler: AsyncIOScheduler | None = None) -> FastAP
                     agent.config.name,
                     thread_id,
                 )
+            except asyncio.CancelledError:
+                logger.warning(
+                    "Client disconnected for agent '%s' thread '%s'",
+                    agent.config.name,
+                    thread_id,
+                )
+                raise
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
                     "Chat failed for agent '%s' thread '%s': %s",

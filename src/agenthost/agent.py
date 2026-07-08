@@ -86,6 +86,12 @@ class Agent:
             try:
                 stream = await self.client.chat.completions.create(**completion_kwargs)
                 attempt = 0
+            except asyncio.CancelledError:
+                logger.warning(
+                    "LLM request cancelled for thread '%s' (client disconnected?)",
+                    thread_id,
+                )
+                raise
             except Exception as exc:
                 attempt += 1
                 if attempt >= max_attempts:
@@ -119,45 +125,52 @@ class Agent:
             tool_calls: list[dict[str, Any]] = []
             finish_reason: str | None = None
 
-            async for chunk in stream:
-                # Some providers (e.g. DeepSeek via DeepInfra) emit chunks with an
-                # empty choices list as keep-alives or final markers. Skip them.
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                finish_reason = chunk.choices[0].finish_reason or finish_reason
+            try:
+                async for chunk in stream:
+                    # Some providers (e.g. DeepSeek via DeepInfra) emit chunks with an
+                    # empty choices list as keep-alives or final markers. Skip them.
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    finish_reason = chunk.choices[0].finish_reason or finish_reason
 
-                if delta.content:
-                    assistant_content += delta.content
-                    yield json.dumps({"type": "content", "data": delta.content}) + "\n"
+                    if delta.content:
+                        assistant_content += delta.content
+                        yield json.dumps({"type": "content", "data": delta.content}) + "\n"
 
-                if delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        # Some providers (e.g. Gemini) omit the index on tool-call
-                        # deltas. Default to the current/last tool call, or 0.
-                        index = tc.index
-                        if index is None:
-                            index = len(tool_calls) - 1 if tool_calls else 0
-                            logger.warning(
-                                "Tool-call delta missing index; defaulting to %s",
-                                index,
-                            )
-                        while len(tool_calls) <= index:
-                            tool_calls.append({"id": f"call_{len(tool_calls)}", "type": "function", "function": {"name": "", "arguments": ""}})
-                        if tc.id:
-                            tool_calls[index]["id"] = tc.id
-                        if tc.function and tc.function.name:
-                            tool_calls[index]["function"]["name"] = tc.function.name
-                        if tc.function and tc.function.arguments:
-                            tool_calls[index]["function"]["arguments"] += tc.function.arguments
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            # Some providers (e.g. Gemini) omit the index on tool-call
+                            # deltas. Default to the current/last tool call, or 0.
+                            index = tc.index
+                            if index is None:
+                                index = len(tool_calls) - 1 if tool_calls else 0
+                                logger.warning(
+                                    "Tool-call delta missing index; defaulting to %s",
+                                    index,
+                                )
+                            while len(tool_calls) <= index:
+                                tool_calls.append({"id": f"call_{len(tool_calls)}", "type": "function", "function": {"name": "", "arguments": ""}})
+                            if tc.id:
+                                tool_calls[index]["id"] = tc.id
+                            if tc.function and tc.function.name:
+                                tool_calls[index]["function"]["name"] = tc.function.name
+                            if tc.function and tc.function.arguments:
+                                tool_calls[index]["function"]["arguments"] += tc.function.arguments
 
-                        # Preserve provider-specific fields (e.g. Gemini's
-                        # thought_signature) that the OpenAI SDK does not model.
-                        extra = getattr(tc, "model_extra", None) or {}
-                        for key, value in extra.items():
-                            if key not in ("id", "index", "type", "function") and value is not None:
-                                tool_calls[index][key] = value
-                                logger.debug("Preserved tool-call extra field: %s", key)
+                            # Preserve provider-specific fields (e.g. Gemini's
+                            # thought_signature) that the OpenAI SDK does not model.
+                            extra = getattr(tc, "model_extra", None) or {}
+                            for key, value in extra.items():
+                                if key not in ("id", "index", "type", "function") and value is not None:
+                                    tool_calls[index][key] = value
+                                    logger.debug("Preserved tool-call extra field: %s", key)
+            except asyncio.CancelledError:
+                logger.warning(
+                    "LLM stream cancelled for thread '%s' (client disconnected?)",
+                    thread_id,
+                )
+                raise
 
             if tool_calls:
                 tool_round += 1
