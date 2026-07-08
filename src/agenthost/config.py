@@ -122,7 +122,11 @@ class AgentConfig:
             "answering. Do not guess the current date or time.\n\n"
             "Do not repeat previous paragraphs, section headers, tables, or bullet lists. "
             "If you have already stated a fact, metric, or recommendation, do not restate it. "
-            "Move forward to the next point instead of summarizing what you just wrote."
+            "Move forward to the next point instead of summarizing what you just wrote.\n\n"
+            "When writing a report or multi-section answer, each section may appear exactly once. "
+            "Do not write a section as bullets and then rewrite the same section as a table. "
+            "Do not add a recap, summary, or 'in conclusion' section after the final section. "
+            "Stop writing after the last section is complete."
         )
 
         if self.orchestrator:
