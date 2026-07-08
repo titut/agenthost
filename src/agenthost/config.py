@@ -26,6 +26,7 @@ DEFAULT_CONFIG = {
     "thinking": None,
     "orchestrator": False,
     "frequency_penalty": None,
+    "presence_penalty": None,
 }
 
 
@@ -42,6 +43,7 @@ class AgentConfig:
     max_tokens: int | None = DEFAULT_CONFIG["max_tokens"]
     thinking: str | None = DEFAULT_CONFIG["thinking"]
     frequency_penalty: float | None = DEFAULT_CONFIG["frequency_penalty"]
+    presence_penalty: float | None = DEFAULT_CONFIG["presence_penalty"]
     orchestrator: bool = DEFAULT_CONFIG["orchestrator"]
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -90,7 +92,9 @@ class AgentConfig:
             "'today', 'current', 'latest', 'recent', a specific date, or a deadline), call "
             "the `get_current_datetime` tool to obtain the current date and time before "
             "answering. Do not guess the current date or time.\n\n"
-            "Do not repeat previous paragraphs."
+            "Do not repeat previous paragraphs, section headers, tables, or bullet lists. "
+            "If you have already stated a fact, metric, or recommendation, do not restate it. "
+            "Move forward to the next point instead of summarizing what you just wrote."
         )
 
         if self.orchestrator:
@@ -274,7 +278,7 @@ class AgentConfig:
         explicit_extra = config.pop("extra", None) or {}
         extra = {k: v for k, v in config.items() if k not in {
             "model", "host", "port", "temperature", "max_memory_turns", "base_url",
-            "max_tokens", "thinking", "frequency_penalty", "orchestrator",
+            "max_tokens", "thinking", "frequency_penalty", "presence_penalty", "orchestrator",
         }}
         extra.update(explicit_extra)
 
@@ -285,6 +289,7 @@ class AgentConfig:
         max_tokens = config.get("max_tokens")
         thinking = config.get("thinking")
         frequency_penalty = config.get("frequency_penalty")
+        presence_penalty = config.get("presence_penalty")
         orchestrator = bool(config.get("orchestrator", False))
 
         return cls(
@@ -299,6 +304,7 @@ class AgentConfig:
             max_tokens=int(max_tokens) if max_tokens is not None else None,
             thinking=str(thinking) if thinking is not None else None,
             frequency_penalty=float(frequency_penalty) if frequency_penalty is not None else None,
+            presence_penalty=float(presence_penalty) if presence_penalty is not None else None,
             orchestrator=orchestrator,
             extra=extra,
         )

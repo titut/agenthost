@@ -417,7 +417,8 @@ host: 127.0.0.1          # 127.0.0.1 = local only; 0.0.0.0 = accessible from net
 temperature: 0.7
 base_url: https://api.openai.com/v1
 max_tokens: 2048         # Optional: cap LLM output tokens
-frequency_penalty: 0.0   # Optional: discourage repetition (-2.0 to 2.0)
+frequency_penalty: 0.0   # Optional: penalize repeated tokens (-2.0 to 2.0)
+presence_penalty: 0.0    # Optional: penalize repeated topics (-2.0 to 2.0)
 thinking: high           # Optional: reasoning effort for supported models
 max_memory_turns: 50
 port: 8000               # Optional: pin a specific port
@@ -431,7 +432,8 @@ port: 8000               # Optional: pin a specific port
 | `temperature`       | `0.7`                | LLM temperature (0.0 – 1.0)                        |
 | `base_url`          | `https://api.openai.com/v1` | OpenAI-compatible API endpoint            |
 | `max_tokens`        | `None`               | Maximum tokens in a single LLM response            |
-| `frequency_penalty` | `None`               | Repetition penalty (-2.0 to 2.0)                   |
+| `frequency_penalty` | `None`               | Penalize repeated tokens (-2.0 to 2.0)             |
+| `presence_penalty`  | `None`               | Penalize repeated topics (-2.0 to 2.0)             |
 | `thinking`          | `None`               | Reasoning effort for supported models (e.g., `high`) |
 | `max_memory_turns`  | `50`                 | Max conversation turns kept in memory (0 = unlimited) |
 | `port`              | `auto`               | Explicit TCP port (auto-assigned from 8000 if omitted) |

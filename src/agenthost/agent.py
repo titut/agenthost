@@ -103,6 +103,8 @@ class Agent:
                 completion_kwargs["reasoning_effort"] = self.config.thinking
             if self.config.frequency_penalty is not None:
                 completion_kwargs["frequency_penalty"] = self.config.frequency_penalty
+            if self.config.presence_penalty is not None:
+                completion_kwargs["presence_penalty"] = self.config.presence_penalty
 
             estimated_tokens = _estimate_tokens(
                 completion_kwargs["messages"], completion_kwargs["model"]

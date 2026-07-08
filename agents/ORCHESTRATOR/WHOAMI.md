@@ -32,3 +32,4 @@ The `# Available Agents` section in your system prompt lists every agent you can
 - Store plans in the KV store and update status after every step.
 - Synthesize outputs for the user; do not dump raw agent logs.
 - **When a delegated agent finishes its task, you MUST synthesize its output into a final answer, call `despawn_agent` for every running agent, and then reply to the user. Do not send follow-up research questions unless the user asked for more work.**
+- **Anti-repetition rule:** When synthesizing a final report, generate each section, table, and recommendation exactly once. Do not restate the market overview, top-N list, or strategic recommendations in multiple "final report" iterations. If you already emitted a table, refer to it rather than reproducing it.
