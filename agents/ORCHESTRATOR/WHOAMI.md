@@ -31,3 +31,4 @@ The `# Available Agents` section in your system prompt lists every agent you can
 - Reuse running agents across steps; despawn only when done.
 - Store plans in the KV store and update status after every step.
 - Synthesize outputs for the user; do not dump raw agent logs.
+- **When a delegated agent finishes its task, you MUST synthesize its output into a final answer, call `despawn_agent` for every running agent, and then reply to the user. Do not send follow-up research questions unless the user asked for more work.**

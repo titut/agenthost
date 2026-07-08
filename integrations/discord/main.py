@@ -139,6 +139,8 @@ async def fetch_agent_reply(thread_id: str, message: str) -> str:
                                         content_parts.append(event["data"])
                                 except json.JSONDecodeError:
                                     log("debug", f"Failed to parse SSE data: {data}")
+                            elif current_event == "heartbeat":
+                                log("trace", "Agent heartbeat received")
                             elif current_event == "error":
                                 raise RuntimeError(f"Agent error: {data}")
 

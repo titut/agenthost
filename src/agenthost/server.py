@@ -1,6 +1,7 @@
 """FastAPI server exposing an agent via HTTP + SSE."""
 from __future__ import annotations
 
+import asyncio
 import socket
 import uuid
 from contextlib import asynccontextmanager, closing
@@ -111,9 +112,35 @@ def build_app(agent: Agent, scheduler: AsyncIOScheduler | None = None) -> FastAP
         async def event_stream() -> AsyncIterator[str]:
             # First event gives the thread_id so the client can continue the conversation.
             yield f"event: meta\ndata: {{\"thread_id\": \"{thread_id}\"}}\n\n"
+
+            # Send periodic heartbeats while the agent is thinking or running tools.
+            # This keeps long-lived SSE connections open for clients with short
+            # read timeouts (e.g., the Discord bridge).
+            heartbeat_interval = 60.0
+            queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
+
+            async def consume_chat() -> None:
+                try:
+                    async for chunk in agent.chat(thread_id, request.message):
+                        await queue.put(("message", chunk))
+                finally:
+                    await queue.put(None)
+
+            async def heartbeat() -> None:
+                while True:
+                    await asyncio.sleep(heartbeat_interval)
+                    await queue.put(("heartbeat", "{}"))
+
+            chat_task = asyncio.create_task(consume_chat())
+            heartbeat_task = asyncio.create_task(heartbeat())
+
             try:
-                async for chunk in agent.chat(thread_id, request.message):
-                    yield f"event: message\ndata: {chunk}\n\n"
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        break
+                    event_type, data = item
+                    yield f"event: {event_type}\ndata: {data}\n\n"
                 yield f"event: done\ndata: {{}}\n\n"
                 logger.info(
                     "Chat completed for agent '%s' thread '%s'",
@@ -129,6 +156,10 @@ def build_app(agent: Agent, scheduler: AsyncIOScheduler | None = None) -> FastAP
                 )
                 import json
                 yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+            finally:
+                chat_task.cancel()
+                heartbeat_task.cancel()
+                await asyncio.gather(chat_task, heartbeat_task, return_exceptions=True)
 
         return StreamingResponse(
             event_stream(),

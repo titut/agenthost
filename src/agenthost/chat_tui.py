@@ -945,6 +945,10 @@ class ChatApp(App):
                         self.call_next(
                             self._handle_message_event_with_id, stream_id, event
                         )
+                    elif current_event == "heartbeat":
+                        # Keep-alive event; keeps the HTTP read timeout from firing
+                        # during long tool calls.
+                        pass
                     elif current_event == "done":
                         self.call_next(self._set_status, "Ready.")
                     elif current_event == "error":
