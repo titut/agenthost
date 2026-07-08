@@ -80,6 +80,15 @@ def _add_chat_parser(subparsers: argparse._SubParsersAction) -> argparse.Argumen
         action="store_true",
         help="Use the simple text chat loop instead of the TUI.",
     )
+    parser.add_argument(
+        "--chatless",
+        action="store_true",
+        help=(
+            "Open the TUI in monitor mode: connect to an existing thread and "
+            "watch all SSE events without an interactive chat input. "
+            "Use with --port (or --agent/--url) and --thread."
+        ),
+    )
     return parser
 
 
@@ -276,7 +285,19 @@ def _do_chat(args: argparse.Namespace) -> int:
         return 0
 
     agent_name = _fetch_agent_name(url)
-    app = ChatApp(url=url, agent_name=agent_name, thread_id=thread_id)
+    if args.chatless:
+        if not thread_id:
+            print(
+                "[error: --chatless requires --thread to know which thread to monitor]",
+                file=sys.stderr,
+            )
+            return 1
+        from agenthost.chat_tui import ChatlessApp
+
+        events_url = url.replace("/chat", f"/events/{thread_id}")
+        app = ChatlessApp(url=events_url, agent_name=agent_name, thread_id=thread_id)
+    else:
+        app = ChatApp(url=url, agent_name=agent_name, thread_id=thread_id)
     app.run()
     return 0
 

@@ -26,6 +26,37 @@ DEFAULT_THREAD_ID = "default"
 DEFAULT_PORT_START = 8000
 DEFAULT_PORT_END = 9000
 
+# Per-thread SSE subscriber queues. Allows multiple clients (e.g., Discord + TUI
+# chatless monitor) to observe the same agent turn in real time.
+_THREAD_SUBSCRIBERS: dict[str, list[asyncio.Queue[tuple[str, str] | None]]] = {}
+
+
+def _subscribe_thread(thread_id: str) -> asyncio.Queue[tuple[str, str] | None]:
+    """Create and register a subscriber queue for the given thread."""
+    queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue(maxsize=1000)
+    _THREAD_SUBSCRIBERS.setdefault(thread_id, []).append(queue)
+    return queue
+
+
+def _unsubscribe_thread(
+    thread_id: str, queue: asyncio.Queue[tuple[str, str] | None]
+) -> None:
+    """Remove a subscriber queue for the given thread."""
+    subscribers = _THREAD_SUBSCRIBERS.get(thread_id, [])
+    if queue in subscribers:
+        subscribers.remove(queue)
+    if not subscribers:
+        _THREAD_SUBSCRIBERS.pop(thread_id, None)
+
+
+def _publish_thread_event(thread_id: str, event_type: str, data: str) -> None:
+    """Publish an event to all subscribers of the thread."""
+    for queue in _THREAD_SUBSCRIBERS.get(thread_id, []):
+        try:
+            queue.put_nowait((event_type, data))
+        except asyncio.QueueFull:
+            pass
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -111,7 +142,9 @@ def build_app(agent: Agent, scheduler: AsyncIOScheduler | None = None) -> FastAP
 
         async def event_stream() -> AsyncIterator[str]:
             # First event gives the thread_id so the client can continue the conversation.
-            yield f"event: meta\ndata: {{\"thread_id\": \"{thread_id}\"}}\n\n"
+            meta_event = f"event: meta\ndata: {{\"thread_id\": \"{thread_id}\"}}\n\n"
+            yield meta_event
+            _publish_thread_event(thread_id, "meta", f"{{\"thread_id\": \"{thread_id}\"}}")
 
             # Send periodic heartbeats while the agent is thinking or running tools.
             # This keeps long-lived SSE connections open for clients with short
@@ -140,7 +173,9 @@ def build_app(agent: Agent, scheduler: AsyncIOScheduler | None = None) -> FastAP
                     if item is None:
                         break
                     event_type, data = item
+                    _publish_thread_event(thread_id, event_type, data)
                     yield f"event: {event_type}\ndata: {data}\n\n"
+                _publish_thread_event(thread_id, "done", "{}")
                 yield f"event: done\ndata: {{}}\n\n"
                 logger.info(
                     "Chat completed for agent '%s' thread '%s'",
@@ -162,11 +197,67 @@ def build_app(agent: Agent, scheduler: AsyncIOScheduler | None = None) -> FastAP
                     exc,
                 )
                 import json
-                yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+                error_data = json.dumps({'error': str(exc)})
+                _publish_thread_event(thread_id, "error", error_data)
+                yield f"event: error\ndata: {error_data}\n\n"
             finally:
                 chat_task.cancel()
                 heartbeat_task.cancel()
                 await asyncio.gather(chat_task, heartbeat_task, return_exceptions=True)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.get("/events/{thread_id}")
+    async def events(thread_id: str) -> StreamingResponse:
+        """Subscribe to real-time SSE events for an existing thread.
+
+        This allows a second client (e.g., the TUI in chatless mode) to observe
+        an agent turn that was initiated by another client (e.g., Discord).
+        """
+        logger.info(
+            "Events subscription for agent '%s' thread '%s'",
+            agent.config.name,
+            thread_id,
+        )
+
+        async def event_stream() -> AsyncIterator[str]:
+            queue = _subscribe_thread(thread_id)
+            logger.debug(
+                "Subscriber connected to thread '%s' (%d total subscribers)",
+                thread_id,
+                len(_THREAD_SUBSCRIBERS.get(thread_id, [])),
+            )
+            try:
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        # None is used as a sentinel to keep the stream alive
+                        # when the producer wants to drop stale subscribers.
+                        continue
+                    event_type, data = item
+                    yield f"event: {event_type}\ndata: {data}\n\n"
+            except asyncio.CancelledError:
+                logger.warning(
+                    "Events subscriber disconnected for agent '%s' thread '%s'",
+                    agent.config.name,
+                    thread_id,
+                )
+                raise
+            finally:
+                _unsubscribe_thread(thread_id, queue)
+                logger.debug(
+                    "Subscriber disconnected from thread '%s' (%d remaining)",
+                    thread_id,
+                    len(_THREAD_SUBSCRIBERS.get(thread_id, [])),
+                )
 
         return StreamingResponse(
             event_stream(),

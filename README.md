@@ -93,12 +93,13 @@ This opens a full-screen TUI chat client with:
 
 - **Markdown rendering** for assistant responses and syntax highlighting for code blocks
 - **Streaming tool cards** — tool calls and results appear as collapsible cards instead of raw JSON
+- **Thinking display** — if the model exposes reasoning content, a collapsible `🧠 thinking` card streams it before the final answer
 - **Multi-line input** — press `Enter` to send; `Shift+Enter` inserts a newline when your terminal supports it
 - **Message history** — `↑` / `↓` recall previous messages
 - **Context attachments** — type `@path/to/file` or `@path/to/dir/` to attach files or directories to your prompt; the right-hand panel tracks attached context and files the agent has touched
 - **Thread continuity** — the current thread ID is shown in the header and persisted across turns
 
-Use `--no-tui` to fall back to the simple text REPL, or `--once` for single-shot non-interactive output.
+Use `--no-tui` to fall back to the simple text REPL, `--once` for single-shot non-interactive output, or `--chatless` to passively monitor an existing thread (see below).
 
 TUI slash commands:
 
@@ -119,6 +120,18 @@ curl -N -H "Accept: text/event-stream" \
 ```
 
 The `-H "Content-Type: application/json"` is required; without it `curl -d` sends form-encoded data and FastAPI rejects the request.
+
+### Monitor an Agent Turn (`--chatless`)
+
+When an agent is working through Discord (or any other client), you can open a passive TUI monitor to watch every SSE event in real time:
+
+```bash
+agenthost chat --port 8000 --thread <thread_id> --chatless
+```
+
+The monitor connects to `/events/<thread_id>` and shows a scrolling log of `meta`, `heartbeat`, `content`, `thinking`, `tool_start`, `tool_result`, `done`, and `error` events. It has no chat input — it only observes. This is useful for debugging why a long agent turn appears stuck or what tools it is calling.
+
+Use `--agent`, `--port`, or `--url` to target the running agent; `--thread` is required.
 
 ---
 
@@ -157,6 +170,7 @@ Options:
 | `--thread`    | Continue an existing conversation thread                  |
 | `--once`      | Send a single message and exit (requires `--message`)     |
 | `--no-tui`    | Use the simple text REPL instead of the full-screen TUI   |
+| `--chatless`  | Passive monitor mode; requires `--thread`                 |
 
 The CLI streams content, tool calls, and tool results in real time.
 
@@ -402,6 +416,9 @@ model: gpt-4o-mini
 host: 127.0.0.1          # 127.0.0.1 = local only; 0.0.0.0 = accessible from network
 temperature: 0.7
 base_url: https://api.openai.com/v1
+max_tokens: 2048         # Optional: cap LLM output tokens
+frequency_penalty: 0.0   # Optional: discourage repetition (-2.0 to 2.0)
+thinking: high           # Optional: reasoning effort for supported models
 max_memory_turns: 50
 port: 8000               # Optional: pin a specific port
 ```
@@ -413,6 +430,9 @@ port: 8000               # Optional: pin a specific port
 | `host`              | `127.0.0.1`          | Bind address                                       |
 | `temperature`       | `0.7`                | LLM temperature (0.0 – 1.0)                        |
 | `base_url`          | `https://api.openai.com/v1` | OpenAI-compatible API endpoint            |
+| `max_tokens`        | `None`               | Maximum tokens in a single LLM response            |
+| `frequency_penalty` | `None`               | Repetition penalty (-2.0 to 2.0)                   |
+| `thinking`          | `None`               | Reasoning effort for supported models (e.g., `high`) |
 | `max_memory_turns`  | `50`                 | Max conversation turns kept in memory (0 = unlimited) |
 | `port`              | `auto`               | Explicit TCP port (auto-assigned from 8000 if omitted) |
 
@@ -652,7 +672,7 @@ src/agenthost/
 ├── cli.py           # CLI: serve, chat, list, key subcommands
 ├── config.py        # AgentConfig: loads agent.yaml, builds system prompt
 ├── agent.py         # Agent class: LLM loop, tool invocation, memory integration
-├── server.py        # FastAPI server: /health, /chat (SSE streaming)
+├── server.py        # FastAPI server: /health, /chat (SSE), /events/{thread_id}
 ├── memory.py        # AgentMemory: SQLite-backed conversation + KV store
 ├── tools.py         # Tool discovery and in-process execution
 ├── skills.py        # Skill loading from markdown files
@@ -676,6 +696,22 @@ src/agenthost/
 | `skills.py`   | 19    | Markdown skill file loader                        |
 
 ---
+
+## Debugging
+
+### Persistent Debug Logging
+
+Debug logging is enabled permanently and writes to `agenthost.log` in the agenthost home directory. LLM requests include an approximate token count:
+
+```text
+LLM request for thread 'abc123' (~3241 tokens): {"model": "...", "messages": ...}
+```
+
+To disable debug output, set `AGENTHOST_DEBUG=0`.
+
+### Client Disconnection Logging
+
+`asyncio.CancelledError` during LLM requests is now logged as a warning, making it obvious when a client (e.g., Discord) disconnected while a long turn was still running.
 
 ## Dependencies
 

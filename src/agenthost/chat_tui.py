@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -1082,6 +1083,222 @@ class ChatApp(App):
             self._set_status("Interrupted.")
         else:
             self.exit()
+
+    def action_quit(self) -> None:
+        self.exit()
+
+    async def on_shutdown(self) -> None:
+        await self._client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Chatless monitor mode
+# ---------------------------------------------------------------------------
+
+
+class ChatlessApp(App):
+    """Passive SSE monitor for watching an agent thread without chatting."""
+
+    CSS = """
+    Screen {
+        layout: grid;
+        grid-size: 1;
+        grid-rows: auto 1fr auto;
+    }
+    #header {
+        height: auto;
+        padding: 0 2;
+        color: $text;
+        text-style: bold;
+    }
+    #event-log {
+        width: 100%;
+        height: 100%;
+        border: solid $primary-darken-1;
+    }
+    #status-bar {
+        height: auto;
+        padding: 0 2;
+        color: $text-muted;
+    }
+    .event-line {
+        width: 100%;
+        height: auto;
+        padding: 0 1;
+        text-wrap: wrap;
+    }
+    """
+
+    BINDINGS = [
+        ("ctrl+q", "quit", "Quit"),
+    ]
+
+    def __init__(
+        self,
+        url: str,
+        agent_name: str = "agent",
+        thread_id: str | None = None,
+    ) -> None:
+        self.url = url
+        self.agent_name = agent_name
+        self.thread_id = thread_id
+        self._client = httpx.AsyncClient(timeout=600.0)
+        self._stream_task: asyncio.Task | None = None
+        self._stream_id: int = 0
+        super().__init__()
+
+    def compose(self) -> ComposeResult:
+        thread_display = self.thread_id or "<new>"
+        yield Static(
+            f"agenthost monitor — {self.agent_name} — thread: {thread_display}",
+            id="header",
+        )
+        yield VerticalScroll(id="event-log")
+        yield Static("Connecting…", id="status-bar", markup=False)
+        yield Footer()
+
+    @property
+    def event_log(self) -> VerticalScroll:
+        return self.query_one("#event-log", VerticalScroll)
+
+    @property
+    def status_bar(self) -> Static:
+        return self.query_one("#status-bar", Static)
+
+    def _set_status(self, text: str) -> None:
+        self.status_bar.update(text)
+
+    def on_mount(self) -> None:
+        self._stream_id += 1
+        self._stream_task = self._stream_events(self._stream_id)
+
+    @work(exclusive=True)
+    async def _stream_events(self, stream_id: int) -> None:
+        self._set_status(f"Streaming events from {self.url}…")
+        try:
+            async with self._client.stream("GET", self.url) as response:
+                response.raise_for_status()
+                current_event: str | None = None
+                async for line in response.aiter_lines():
+                    line = line.strip()
+                    if not line:
+                        current_event = None
+                        continue
+                    if line.startswith("event:"):
+                        current_event = line.split(":", 1)[1].strip()
+                        continue
+                    if not line.startswith("data:") or current_event is None:
+                        continue
+
+                    data_part = line.split(":", 1)[1].strip()
+                    self.call_next(
+                        self._render_event, stream_id, current_event, data_part
+                    )
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text or str(exc)
+            self.call_next(
+                self._render_system_line, stream_id, f"HTTP error: {detail}"
+            )
+            self.call_next(self._set_status, f"HTTP error: {detail}")
+        except httpx.RequestError as exc:
+            self.call_next(
+                self._render_system_line, stream_id, f"Connection error: {exc}"
+            )
+            self.call_next(self._set_status, f"Connection error: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            self.call_next(
+                self._render_system_line, stream_id, f"Stream error: {exc}"
+            )
+            self.call_next(self._set_status, f"Stream error: {exc}")
+
+    async def _render_event(
+        self, stream_id: int, event_type: str, data: str
+    ) -> None:
+        if stream_id != self._stream_id:
+            return
+
+        timestamp = time.strftime("%H:%M:%S", time.localtime())
+        prefix = f"[{timestamp}] [{event_type}]"
+
+        if event_type == "meta":
+            await self.event_log.mount(
+                Static(f"{prefix} {data}", classes="event-line")
+            )
+        elif event_type == "heartbeat":
+            self._set_status(f"Heartbeat at {timestamp}")
+        elif event_type == "done":
+            await self.event_log.mount(
+                Static(f"{prefix} turn complete", classes="event-line")
+            )
+            self._set_status("Turn complete. Waiting for next turn…")
+        elif event_type == "error":
+            await self.event_log.mount(
+                Static(f"{prefix} ERROR: {data}", classes="event-line")
+            )
+            self._set_status(f"Error: {data}")
+        elif event_type in ("message", "thinking"):
+            try:
+                payload = json.loads(data)
+                subtype = payload.get("type", "unknown")
+                payload_data = payload.get("data")
+            except json.JSONDecodeError:
+                subtype = "raw"
+                payload_data = data
+
+            if subtype == "content":
+                await self.event_log.mount(
+                    Static(f"{prefix} content: {payload_data}", classes="event-line")
+                )
+            elif subtype == "thinking":
+                await self.event_log.mount(
+                    Static(f"{prefix} thinking: {payload_data}", classes="event-line")
+                )
+            elif subtype == "tool_start":
+                name = payload_data.get("name", "tool") if isinstance(payload_data, dict) else "tool"
+                args = payload_data.get("arguments", {}) if isinstance(payload_data, dict) else {}
+                await self.event_log.mount(
+                    Static(
+                        f"{prefix} tool_start: {name}({json.dumps(args, default=str)})",
+                        classes="event-line",
+                    )
+                )
+            elif subtype == "tool_result":
+                name = payload_data.get("name", "tool") if isinstance(payload_data, dict) else "tool"
+                result = payload_data.get("result", "") if isinstance(payload_data, dict) else ""
+                await self.event_log.mount(
+                    Static(
+                        f"{prefix} tool_result: {name} -> {str(result)[:200]}",
+                        classes="event-line",
+                    )
+                )
+            elif subtype == "tool_error":
+                name = payload_data.get("name", "tool") if isinstance(payload_data, dict) else "tool"
+                error = payload_data.get("error", "") if isinstance(payload_data, dict) else ""
+                await self.event_log.mount(
+                    Static(
+                        f"{prefix} tool_error: {name} -> {error}",
+                        classes="event-line",
+                    )
+                )
+            else:
+                await self.event_log.mount(
+                    Static(f"{prefix} {subtype}: {payload_data}", classes="event-line")
+                )
+        else:
+            await self.event_log.mount(
+                Static(f"{prefix} {data}", classes="event-line")
+            )
+
+        self.event_log.scroll_end(animate=False)
+
+    async def _render_system_line(self, stream_id: int, text: str) -> None:
+        if stream_id != self._stream_id:
+            return
+        timestamp = time.strftime("%H:%M:%S", time.localtime())
+        await self.event_log.mount(
+            Static(f"[{timestamp}] [system] {text}", classes="event-line")
+        )
+        self.event_log.scroll_end(animate=False)
 
     def action_quit(self) -> None:
         self.exit()
