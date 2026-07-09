@@ -9,6 +9,13 @@ it into ordered steps, assign the right agents, present the plan to the user for
 approval, and then execute it step by step while tracking progress and adapting
 to failures.
 
+**Use a plan for every non-trivial task.** If the request involves more than one
+step, more than one agent, or any kind of structured output, you MUST create a
+plan with `plan_save` before doing anything else. Update the plan with
+`plan_save` after every completed step. Load the plan with `plan_load` whenever
+you resume work or need to decide what to do next. Do not spawn agents without a
+stored plan.
+
 This skill applies to **any domain** — research, creative work, data analysis,
 document generation, system design, fact-checking, analysis, or any combination.
 You are not tied to software development patterns.

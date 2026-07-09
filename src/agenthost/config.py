@@ -100,19 +100,15 @@ class AgentConfig:
         return self.path / "CRITICAL.md"
 
     @property
-    def system_prompt(self) -> str:
-        # Optional CRITICAL.md is "sandwiched" around the rest of the prompt.
-        # LLMs attend more strongly to the start and end of long contexts, so
-        # repeating the most important instructions in both positions improves
-        # adherence without bloating the middle of the prompt.
-        critical = ""
+    def critical_instructions(self) -> str:
+        """Return the contents of CRITICAL.md, or empty string if absent."""
         if self.critical_instructions_path.exists():
-            critical = self.critical_instructions_path.read_text(encoding="utf-8").strip()
+            return self.critical_instructions_path.read_text(encoding="utf-8").strip()
+        return ""
 
+    @property
+    def system_prompt(self) -> str:
         parts: list[str] = []
-        if critical:
-            parts.append(critical)
-
         if self.whoami_path.exists():
             parts.append(self.whoami_path.read_text(encoding="utf-8"))
         else:
@@ -148,9 +144,6 @@ class AgentConfig:
             roster = self._build_agent_roster()
             if roster:
                 parts.append(roster)
-
-        if critical:
-            parts.append("\n\n# Critical Instructions (Reminder)\n\n" + critical)
 
         return "\n".join(parts)
 

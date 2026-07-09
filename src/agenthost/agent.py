@@ -35,7 +35,8 @@ class Agent:
         self.memory = AgentMemory(config)
         builtins = make_builtin_tools(config, scheduler, agent_provider=lambda: self)
         self.tool_schemas, self.tool_runner = discover_tools(config.tools_dir, builtins, config=config)
-        self.system_prompt = config.system_prompt + build_builtin_tools_prompt(config)
+        self.system_prompt_initial = config.system_prompt + build_builtin_tools_prompt(config)
+        self.system_prompt_final = config.critical_instructions
 
     async def chat(self, thread_id: str, user_message: str) -> AsyncIterator[str]:
         # Expose the current thread_id to built-in tools that need it.
@@ -313,7 +314,14 @@ class Agent:
             break
 
     def _build_messages(self, thread_id: str) -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = [{"role": "system", "content": self.system_prompt}]
+        # System prompt sandwich: initial system prompt at the start, final
+        # system prompt (critical instructions / reminder) right before the
+        # current user message. This sandwiches the conversation history in the
+        # middle, which helps long-context models remember the most important
+        # rules when generating the response.
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": self.system_prompt_initial}
+        ]
 
         history = self.memory.get_messages(thread_id)
 
@@ -328,21 +336,33 @@ class Agent:
         # boundaries so assistant tool_call + tool response groups stay intact.
         normalized_history = self._trim_history_by_tokens(normalized_history, thread_id)
 
-        # Prepend the thread_id to the latest user message so the agent always
-        # knows which conversation it is in. This is needed for tools like
-        # send_discord_message that must target the same channel/thread.
-        # Memory stays clean because we only modify the copy sent to the LLM.
+        # Separate the current user turn from earlier history. The final system
+        # prompt reminder is inserted immediately before the current user message
+        # so the model sees it right before it must respond.
+        current_user: dict[str, Any] | None = None
         if normalized_history and normalized_history[-1]["role"] == "user":
             normalized_history = list(normalized_history)
-            normalized_history[-1] = {
-                **normalized_history[-1],
-                "content": f"[thread_id: {thread_id}] {normalized_history[-1]['content']}",
+            current_user = normalized_history.pop()
+            # Prepend the thread_id to the latest user message so the agent always
+            # knows which conversation it is in. This is needed for tools like
+            # send_discord_message that must target the same channel/thread.
+            # Memory stays clean because we only modify the copy sent to the LLM.
+            current_user = {
+                **current_user,
+                "content": f"[thread_id: {thread_id}] {current_user['content']}",
             }
 
         for msg in normalized_history:
             msg_copy = dict(msg)
             msg_copy.pop("created_at", None)
             messages.append(msg_copy)
+
+        if self.system_prompt_final:
+            messages.append({"role": "system", "content": self.system_prompt_final})
+
+        if current_user is not None:
+            messages.append(current_user)
+
         return messages
 
     def _trim_history_by_tokens(

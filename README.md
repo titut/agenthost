@@ -30,7 +30,7 @@ Every agent is a self-contained directory under `agents/`. The framework reads t
 | Critical   | `CRITICAL.md` (optional) | Instructions repeated at the start and end of the system prompt  |
 | Memory     | `memory/memory.db`       | SQLite database with conversation history and KV store           |
 
-`CRITICAL.md` is optional. When present, its contents are placed at both the **start** and **end** of the system prompt, sandwiching the WHOAMI, skills, tool instructions, and roster. This helps long-context models remember the most important rules.
+`CRITICAL.md` is optional. When present, its contents are used as the **final system prompt** — a reminder placed immediately before the current user message, after all previous conversation history. The main system prompt (WHOAMI + skills + tool instructions + roster) stays at the start. This "system prompt sandwich" helps long-context models remember the most important rules right before they generate a response.
 
 ### Multi-Agent Orchestration
 
