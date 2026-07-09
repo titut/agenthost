@@ -193,7 +193,10 @@ async def stream_agent_events(
 
 
 def split_message(text: str, limit: int = MAX_MESSAGE_LENGTH) -> list[str]:
-    """Split a long message into Discord-friendly chunks."""
+    """Split a long message into Discord-friendly non-empty chunks."""
+    text = text.strip()
+    if not text:
+        return []
     if len(text) <= limit:
         return [text]
 
@@ -207,9 +210,23 @@ def split_message(text: str, limit: int = MAX_MESSAGE_LENGTH) -> list[str]:
         cut = text.rfind("\n", 0, limit)
         if cut == -1:
             cut = limit
-        chunks.append(text[:cut])
+        chunk = text[:cut].strip()
+        if chunk:
+            chunks.append(chunk)
         text = text[cut:].lstrip("\n")
     return chunks
+
+
+async def safe_send(channel: discord.abc.Messageable, text: str) -> bool:
+    """Send a message after stripping whitespace; skip if empty.
+
+    Returns True if a message was actually sent.
+    """
+    text = text.strip()
+    if not text:
+        return False
+    await channel.send(text)
+    return True
 
 
 def clean_mentions(text: str, bot_user: discord.ClientUser) -> str:
@@ -347,6 +364,7 @@ async def process_agent_request(
 
     async def flush_buffer(force: bool = False) -> None:
         nonlocal content_buffer, sent_something
+        content_buffer = content_buffer.strip()
         if not content_buffer:
             return
         # Keep messages well under Discord's 2000-char limit to leave room for
@@ -355,12 +373,12 @@ async def process_agent_request(
         if len(content_buffer) >= limit or force:
             chunks = split_message(content_buffer, limit=limit)
             for chunk in chunks[:-1]:
-                await channel.send(chunk)
-                sent_something = True
-            content_buffer = chunks[-1]
+                if await safe_send(channel, chunk):
+                    sent_something = True
+            content_buffer = chunks[-1] if chunks else ""
             if force and content_buffer:
-                await channel.send(content_buffer)
-                sent_something = True
+                if await safe_send(channel, content_buffer):
+                    sent_something = True
                 content_buffer = ""
 
     try:
@@ -377,8 +395,8 @@ async def process_agent_request(
                     name = event.get("name", "tool")
                     args = event.get("arguments", {})
                     args_str = ", ".join(f"{k}={v!r}" for k, v in args.items()) if args else ""
-                    await channel.send(f"🔧 **Using tool:** `{name}({args_str})`")
-                    sent_something = True
+                    if await safe_send(channel, f"🔧 **Using tool:** `{name}({args_str})`"):
+                        sent_something = True
 
                 elif event_type == "tool_result":
                     name = event.get("name", "tool")
@@ -388,20 +406,20 @@ async def process_agent_request(
                     summary = result[:80].replace("\n", " ")
                     if len(result) > 80:
                         summary += "..."
-                    await channel.send(f"✅ **Tool `{name}` finished:** {summary}")
-                    sent_something = True
+                    if await safe_send(channel, f"✅ **Tool `{name}` finished:** {summary}"):
+                        sent_something = True
 
                 elif event_type == "tool_error":
                     await flush_buffer(force=True)
                     name = event.get("name", "tool")
                     error = str(event.get("error", ""))[:200]
-                    await channel.send(f"❌ **Tool `{name}` failed:** {error}")
-                    sent_something = True
+                    if await safe_send(channel, f"❌ **Tool `{name}` failed:** {error}"):
+                        sent_something = True
 
                 elif event_type == "error":
                     await flush_buffer(force=True)
-                    await channel.send(f"❌ **Agent error:** {event.get('data', 'unknown error')}")
-                    sent_something = True
+                    if await safe_send(channel, f"❌ **Agent error:** {event.get('data', 'unknown error')}"):
+                        sent_something = True
 
                 elif event_type == "done":
                     await flush_buffer(force=True)
@@ -454,8 +472,12 @@ def start_outbound_server() -> aiohttp.web.Application:
 
         try:
             chunks = split_message(text)
+            sent = 0
             for chunk in chunks:
-                await channel.send(chunk)
+                if await safe_send(channel, chunk):
+                    sent += 1
+            if sent == 0:
+                return aiohttp.web.json_response({"error": "empty message"}, status=400)
             log("info", f"Outbound /send to channel {channel_id}: {text[:80]}")
             return aiohttp.web.json_response({"ok": True, "thread_id": thread_id})
         except Exception as exc:
