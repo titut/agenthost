@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sys
+from collections.abc import AsyncIterator
 from typing import Any
 
 import aiohttp
@@ -93,8 +94,19 @@ async def check_agent_health() -> dict[str, Any]:
             raise
 
 
-async def fetch_agent_reply(thread_id: str, message: str) -> str:
-    """Send a message to the agent and collect the streaming text reply."""
+async def stream_agent_events(
+    thread_id: str, message: str
+) -> AsyncIterator[dict[str, Any]]:
+    """Send a message to the agent and yield streaming events as they arrive.
+
+    Yields dicts with keys:
+      - {"type": "content", "data": str}
+      - {"type": "tool_start", "name": str, "arguments": dict}
+      - {"type": "tool_result", "name": str, "result": str}
+      - {"type": "tool_error", "name": str, "error": str}
+      - {"type": "done"}
+      - {"type": "error", "data": str}
+    """
     log("debug", f"-> agent POST {AGENT_CHAT_URL}")
     log("debug", f"   thread_id={thread_id}")
     log("debug", f"   message={message}")
@@ -113,7 +125,6 @@ async def fetch_agent_reply(thread_id: str, message: str) -> str:
                     log("debug", f"<- agent HTTP {response.status_code} (attempt {attempt})")
                     response.raise_for_status()
 
-                    content_parts: list[str] = []
                     current_event: str | None = None
                     event_count = 0
 
@@ -135,18 +146,42 @@ async def fetch_agent_reply(thread_id: str, message: str) -> str:
                             if current_event == "message":
                                 try:
                                     event = json.loads(data)
-                                    if event.get("type") == "content" and isinstance(event.get("data"), str):
-                                        content_parts.append(event["data"])
                                 except json.JSONDecodeError:
                                     log("debug", f"Failed to parse SSE data: {data}")
+                                    continue
+                                event_type = event.get("type")
+                                if event_type == "content" and isinstance(event.get("data"), str):
+                                    yield {"type": "content", "data": event["data"]}
+                                elif event_type == "tool_start" and isinstance(event.get("data"), dict):
+                                    payload = event["data"]
+                                    yield {
+                                        "type": "tool_start",
+                                        "name": payload.get("name", "tool"),
+                                        "arguments": payload.get("arguments", {}),
+                                    }
+                                elif event_type == "tool_result" and isinstance(event.get("data"), dict):
+                                    payload = event["data"]
+                                    yield {
+                                        "type": "tool_result",
+                                        "name": payload.get("name", "tool"),
+                                        "result": payload.get("result", ""),
+                                    }
+                                elif event_type == "tool_error" and isinstance(event.get("data"), dict):
+                                    payload = event["data"]
+                                    yield {
+                                        "type": "tool_error",
+                                        "name": payload.get("name", "tool"),
+                                        "error": payload.get("error", ""),
+                                    }
                             elif current_event == "heartbeat":
                                 log("trace", "Agent heartbeat received")
+                            elif current_event == "done":
+                                yield {"type": "done"}
                             elif current_event == "error":
-                                raise RuntimeError(f"Agent error: {data}")
+                                yield {"type": "error", "data": data}
 
-                    reply = "".join(content_parts)
-                    log("debug", f"SSE events: {event_count}, reply length: {len(reply)}")
-                    return reply
+                    log("debug", f"SSE events: {event_count}")
+                    return
         except Exception as exc:
             last_error = exc
             log("warn", f"Agent request attempt {attempt}/{AGENT_RETRIES} failed: {exc}")
@@ -175,13 +210,6 @@ def split_message(text: str, limit: int = MAX_MESSAGE_LENGTH) -> list[str]:
         chunks.append(text[:cut])
         text = text[cut:].lstrip("\n")
     return chunks
-
-
-async def send_reply(channel: discord.abc.Messageable, text: str) -> None:
-    """Send a reply, splitting it if it exceeds Discord's message length limit."""
-    chunks = split_message(text)
-    for chunk in chunks:
-        await channel.send(chunk)
 
 
 def clean_mentions(text: str, bot_user: discord.ClientUser) -> str:
@@ -305,7 +333,7 @@ async def process_agent_request(
     prompt: str,
     author: discord.User | discord.Member,
 ) -> None:
-    """Forward a prompt to the agent and send the reply back to Discord."""
+    """Forward a prompt to the agent and stream the reply back to Discord."""
     log("info", f"user={author} thread_id={thread_id}: {prompt[:80]}")
 
     if thread_id in busy_threads:
@@ -314,15 +342,74 @@ async def process_agent_request(
         return
 
     busy_threads.add(thread_id)
+    content_buffer = ""
+    sent_something = False
+
+    async def flush_buffer(force: bool = False) -> None:
+        nonlocal content_buffer, sent_something
+        if not content_buffer:
+            return
+        # Keep messages well under Discord's 2000-char limit to leave room for
+        # any formatting the agent may produce.
+        limit = MAX_MESSAGE_LENGTH - 100
+        if len(content_buffer) >= limit or force:
+            chunks = split_message(content_buffer, limit=limit)
+            for chunk in chunks[:-1]:
+                await channel.send(chunk)
+                sent_something = True
+            content_buffer = chunks[-1]
+            if force and content_buffer:
+                await channel.send(content_buffer)
+                sent_something = True
+                content_buffer = ""
 
     try:
         async with channel.typing():
-            reply = await fetch_agent_reply(thread_id, prompt)
+            async for event in stream_agent_events(thread_id, prompt):
+                event_type = event.get("type")
 
-        if reply.strip():
-            log("info", f"reply ({len(reply)} chars): {reply[:80]}")
-            await send_reply(channel, reply)
-        else:
+                if event_type == "content":
+                    content_buffer += event.get("data", "")
+                    await flush_buffer()
+
+                elif event_type == "tool_start":
+                    await flush_buffer(force=True)
+                    name = event.get("name", "tool")
+                    args = event.get("arguments", {})
+                    args_str = ", ".join(f"{k}={v!r}" for k, v in args.items()) if args else ""
+                    await channel.send(f"🔧 **Using tool:** `{name}({args_str})`")
+                    sent_something = True
+
+                elif event_type == "tool_result":
+                    name = event.get("name", "tool")
+                    result = str(event.get("result", ""))
+                    # Only notify completion; the actual result is left for the
+                    # agent's content message so it doesn't spam long tool output.
+                    summary = result[:80].replace("\n", " ")
+                    if len(result) > 80:
+                        summary += "..."
+                    await channel.send(f"✅ **Tool `{name}` finished:** {summary}")
+                    sent_something = True
+
+                elif event_type == "tool_error":
+                    await flush_buffer(force=True)
+                    name = event.get("name", "tool")
+                    error = str(event.get("error", ""))[:200]
+                    await channel.send(f"❌ **Tool `{name}` failed:** {error}")
+                    sent_something = True
+
+                elif event_type == "error":
+                    await flush_buffer(force=True)
+                    await channel.send(f"❌ **Agent error:** {event.get('data', 'unknown error')}")
+                    sent_something = True
+
+                elif event_type == "done":
+                    await flush_buffer(force=True)
+
+        if content_buffer.strip():
+            await flush_buffer(force=True)
+
+        if not sent_something:
             log("warn", "Agent returned empty reply")
             await channel.send("I didn't get a response from the agent.")
     except Exception as exc:
