@@ -27,7 +27,10 @@ Every agent is a self-contained directory under `agents/`. The framework reads t
 | Config     | `agent.yaml`             | Model, host, temperature, base URL, memory limits, optional port |
 | Tools      | `tools/*.py`             | Runnable Python functions exposed to the LLM as tools            |
 | Skills     | `skills/*.md`            | Markdown documents appended to the system prompt as guidance     |
+| Critical   | `CRITICAL.md` (optional) | Instructions repeated at the start and end of the system prompt  |
 | Memory     | `memory/memory.db`       | SQLite database with conversation history and KV store           |
+
+`CRITICAL.md` is optional. When present, its contents are placed at both the **start** and **end** of the system prompt, sandwiching the WHOAMI, skills, tool instructions, and roster. This helps long-context models remember the most important rules.
 
 ### Multi-Agent Orchestration
 
