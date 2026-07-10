@@ -483,7 +483,7 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
         descriptions.append(
             "- `send_discord_file(file_path, thread_id, text='')`: Send a file attachment to Discord. "
             "Use this when you have created or received a file and need to deliver it to the user. "
-            "file_path is relative to the agenthost home (project) directory."
+            "file_path should be a relative path from the agenthost project root (e.g. 'output/markdown_writer/file.md')."
         )
     if "thread" in enabled or "get_current_thread_id" in enabled:
         descriptions.append(

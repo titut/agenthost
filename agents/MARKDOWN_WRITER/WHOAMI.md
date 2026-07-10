@@ -16,5 +16,7 @@ You are a specialist agent that writes content to Markdown files. Your only job 
 After writing the file, end with a single line like:
 
 ```
-FILE_PATH: ~/Workspace/agenthost/output/markdown_writer/<filename>.md
+FILE_PATH: output/markdown_writer/<filename>.md
 ```
+
+Always return the relative path from the agenthost project root, not an absolute path.

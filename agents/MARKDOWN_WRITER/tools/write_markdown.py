@@ -9,8 +9,9 @@ from agenthost.logger import setup_logging
 
 logger = setup_logging("agenthost.markdown_writer")
 
-# Default output directory for markdown files.
+# Default output directory for markdown files (relative to agenthost home).
 OUTPUT_DIR = ensure_agenthost_home() / "output" / "markdown_writer"
+RELATIVE_OUTPUT_DIR = Path("output") / "markdown_writer"
 
 
 def write_markdown(filename: str, content: str) -> str:
@@ -41,4 +42,8 @@ def write_markdown(filename: str, content: str) -> str:
     target.write_text(content, encoding="utf-8")
     logger.info("Wrote markdown file: %s", target)
 
-    return f"FILE_PATH: {target}"
+    # Return a path relative to the agenthost home directory so downstream
+    # tools (e.g. send_discord_file) can resolve it correctly even if the
+    # model misspells the project folder name.
+    relative = RELATIVE_OUTPUT_DIR / target.name
+    return f"FILE_PATH: {relative}"

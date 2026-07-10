@@ -15,8 +15,17 @@ from pathlib import Path
 
 
 def get_agenthost_home() -> Path:
-    """Return the fixed agenthost home (project) directory."""
-    return Path.home() / "Workspace" / "agenthost"
+    """Return the agenthost home (project) directory.
+
+    Respects the ``AGENTHOST_HOME`` environment variable. If unset, derives the
+    project root from the location of this module so it works no matter where
+    the repository was cloned.
+    """
+    env_home = os.environ.get("AGENTHOST_HOME")
+    if env_home:
+        return Path(env_home).expanduser().resolve()
+    # This file is at src/agenthost/home.py, so the project root is three levels up.
+    return Path(__file__).resolve().parent.parent.parent
 
 
 def get_agents_yaml_path() -> Path:
