@@ -7,6 +7,7 @@ Two concepts:
 - **User home**: the user's home directory (``Path.home()``). Built-in tools such
   as ``send_discord_file`` can read files from anywhere under this directory.
 """
+
 from __future__ import annotations
 
 import os

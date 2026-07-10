@@ -1,4 +1,5 @@
 """Markdown writer tool for the MARKDOWN_WRITER agent."""
+
 from __future__ import annotations
 
 from pathlib import Path
