@@ -1,9 +1,0 @@
-name: SW_DEV
-model: deepseek-v4-flash
-host: 127.0.0.1
-temperature: 0.4
-max_memory_tokens: 25000
-base_url: https://api.deepseek.com
-# Optional LLM parameters:
-# max_tokens: 4096
-# thinking: low   # maps to OpenAI's reasoning_effort (low/medium/high); only valid for OpenAI o1/o3 models

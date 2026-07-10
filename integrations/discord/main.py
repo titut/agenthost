@@ -15,7 +15,9 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -24,6 +26,12 @@ import discord
 import httpx
 from discord.ext import commands
 from dotenv import load_dotenv
+
+# Make the agenthost package importable when running this script directly.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from agenthost.filesystem_tools import save_upload_with_text
 
 load_dotenv()
 
@@ -67,6 +75,16 @@ ALLOWED_CHANNEL_IDS = {
 #   - it is mentioned, OR
 #   - the message starts with this prefix (leave empty to disable prefix trigger)
 GUILD_PREFIX = os.environ.get("DISCORD_GUILD_PREFIX", "").strip()
+
+# File attachment types the bridge will extract text from and save for agents.
+SUPPORTED_ATTACHMENT_TYPES = {
+    ".docx",
+    ".pdf",
+    ".xlsx",
+    ".csv",
+    ".md",
+    ".txt",
+}
 
 LEVELS = ["silent", "error", "warn", "info", "debug", "trace"]
 
@@ -374,10 +392,11 @@ async def handle_dm(message: discord.Message) -> None:
         return
 
     thread_id = str(message.channel.id)
+    prompt = await build_prompt_with_attachments(message)
     await process_agent_request(
         channel=message.channel,
         thread_id=thread_id,
-        prompt=message.content,
+        prompt=prompt,
         author=message.author,
     )
 
@@ -411,12 +430,80 @@ async def handle_guild_message(message: discord.Message) -> None:
         return
 
     thread_id = str(message.channel.id)
+    prompt = await build_prompt_with_attachments(message, base_prompt=prompt)
     await process_agent_request(
         channel=message.channel,
         thread_id=thread_id,
         prompt=prompt,
         author=message.author,
     )
+
+
+async def build_prompt_with_attachments(
+    message: discord.Message, base_prompt: str = ""
+) -> str:
+    """Download attachments, extract text, save to uploads/, and build a preamble.
+
+    Returns the base_prompt prefixed with metadata about any saved uploads.
+    Sends a short confirmation to Discord if attachments were processed.
+    """
+    if not message.attachments:
+        return base_prompt
+
+    preamble_lines: list[str] = []
+    saved_count = 0
+
+    for attachment in message.attachments:
+        filename = attachment.filename
+        suffix = Path(filename).suffix.lower()
+
+        if suffix not in SUPPORTED_ATTACHMENT_TYPES:
+            preamble_lines.append(f"User uploaded unsupported file: {filename}")
+            continue
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(attachment.url) as resp:
+                    if resp.status != 200:
+                        log(
+                            "warn",
+                            f"Failed to download attachment {filename}: HTTP {resp.status}",
+                        )
+                        preamble_lines.append(
+                            f"Failed to download uploaded file: {filename}"
+                        )
+                        continue
+                    data = await resp.read()
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(data)
+                tmp_path = Path(tmp.name)
+
+            original_rel, text_rel = await asyncio.to_thread(
+                save_upload_with_text, tmp_path, filename
+            )
+            tmp_path.unlink(missing_ok=True)
+
+            preamble_lines.append(f"User uploaded: {original_rel}")
+            preamble_lines.append(f"Extracted text: {text_rel}")
+            saved_count += 1
+            log(
+                "info",
+                f"Saved upload {filename} -> {original_rel}, text -> {text_rel}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log("error", f"Failed to process attachment {filename}: {exc}")
+            preamble_lines.append(f"Failed to process uploaded file {filename}: {exc}")
+
+    if saved_count and isinstance(message.channel, discord.abc.Messageable):
+        await safe_send(
+            message.channel,
+            f"📎 Saved {saved_count} attachment(s) to the uploads folder.",
+        )
+
+    preamble = "\n".join(preamble_lines)
+    full_prompt = f"{preamble}\n\n{base_prompt}" if base_prompt else preamble
+    return full_prompt
 
 
 async def process_agent_request(

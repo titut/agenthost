@@ -25,6 +25,7 @@ from agenthost.events import (
     load_events,
     run_scheduled_event,
 )
+from agenthost.filesystem_tools import FileSystemTools
 from agenthost.logger import setup_logging
 
 if False:
@@ -405,6 +406,14 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
             "- `get_current_thread_id()`: Return the current conversation thread_id. "
             "Use this when a tool like send_discord_message needs a thread_id and you are not certain of it."
         )
+    if "filesystem" in enabled or "read_file" in enabled or "list_uploads" in enabled:
+        descriptions.append(
+            "- `read_file(path, max_lines, offset)`: Read a text file inside the project directory. "
+            "Use this to read uploaded documents that have been extracted to `.txt` sidecars."
+        )
+        descriptions.append(
+            "- `list_uploads()`: List files in the shared uploads directory, including extracted text sidecars."
+        )
 
     if not descriptions:
         return ""
@@ -436,11 +445,14 @@ def make_builtin_tools(
     datetime_tools = DateTimeTools()
     discord_tools = DiscordTools(config, agent_provider)
     thread_tools = ThreadTools(agent_provider)
+    filesystem_tools = FileSystemTools()
     available = {
         "event_tool": event_tools.event_tool,
         "get_current_datetime": datetime_tools.get_current_datetime,
         "send_discord_message": discord_tools.send_discord_message,
         "get_current_thread_id": thread_tools.get_current_thread_id,
+        "read_file": filesystem_tools.read_file,
+        "list_uploads": filesystem_tools.list_uploads,
     }
 
     # get_current_datetime is enabled by default for every agent.
@@ -457,6 +469,9 @@ def make_builtin_tools(
             functions["send_discord_message"] = available["send_discord_message"]
         elif item == "thread":
             functions["get_current_thread_id"] = available["get_current_thread_id"]
+        elif item == "filesystem":
+            functions["read_file"] = available["read_file"]
+            functions["list_uploads"] = available["list_uploads"]
         elif item in available:
             functions[item] = available[item]
         else:

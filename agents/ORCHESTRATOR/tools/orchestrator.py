@@ -292,7 +292,9 @@ def send_message(agent_name: str, message: str) -> str:
 
     entry = _lookup_active_agent(agent_name)
     if entry is None:
-        logger.error("ORCHESTRATOR send_message: no active agent named '%s'", agent_name)
+        logger.error(
+            "ORCHESTRATOR send_message: no active agent named '%s'", agent_name
+        )
         return json.dumps(
             {
                 "error": f"No active agent named '{agent_name}'. "
@@ -406,25 +408,3 @@ def plan_load(key: str) -> str:
         return json.dumps({"success": True, "key": key, "data": value}, indent=2)
     except Exception as exc:
         return json.dumps({"error": f"Failed to load plan: {exc}"})
-
-
-def plan_delete(key: str) -> str:
-    """Delete a plan (or any key) from the ORCHESTRATOR's KV store.
-
-    Returns a confirmation or error if the key does not exist.
-    """
-    try:
-        memory, _config = _get_memory()
-        existing = memory.get(key)
-        if existing is None:
-            return json.dumps({"error": f"No data found for key '{key}'."})
-        memory.set(key, None)  # kv store uses set with None to clear
-        # We need to actually delete the key. Let's use sqlite directly.
-        db_path = _get_orchestrator_path() / "memory" / "memory.db"
-        conn = sqlite3.connect(str(db_path))
-        conn.execute("DELETE FROM kv WHERE key = ?", (key,))
-        conn.commit()
-        conn.close()
-        return json.dumps({"success": True, "key": key, "action": "deleted"})
-    except Exception as exc:
-        return json.dumps({"error": f"Failed to delete plan: {exc}"})

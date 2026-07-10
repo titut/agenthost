@@ -132,6 +132,40 @@ extra:
 
 The agent uses the unified `event_tool(action="add", action_name="...", ...)` tool to manage events.
 
+## File Attachments
+
+You can upload files directly to the bot. The bridge downloads the file, extracts readable text, and saves both the original and a `.txt` sidecar to the shared `uploads/` folder so agents can read them.
+
+Supported formats:
+
+- `.docx` — Word documents
+- `.pdf` — PDF files
+- `.xlsx` — Excel spreadsheets (converted to Markdown tables)
+- `.csv` — CSV files (converted to Markdown tables)
+- `.md` / `.txt` — plain text
+
+Example:
+
+```
+@MyBot summarize this report
+[attach report.pdf]
+```
+
+The bot will reply with a confirmation like:
+
+> 📎 Saved 1 attachment(s) to the uploads folder.
+
+and the agent sees a preamble in its prompt:
+
+```markdown
+User uploaded: uploads/report.pdf
+Extracted text: uploads/report.pdf.txt
+
+summarize this report
+```
+
+Agents with the `filesystem` built-in tool (e.g. ORCHESTRATOR) can call `read_file("uploads/report.pdf.txt")` to read the extracted text.
+
 ## Notes
 
 - Each Discord channel gets its own `thread_id`:
