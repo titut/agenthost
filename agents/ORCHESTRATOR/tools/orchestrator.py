@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import calendar
 import json
 import sqlite3
 import subprocess
 import sys
-import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -221,16 +221,17 @@ def _lookup_active_agent(name: str) -> dict[str, object] | None:
     return None
 
 
-def _send_once(host: str, port: int, message: str, thread_id: str) -> dict:
+async def _send_once(host: str, port: int, message: str, thread_id: str) -> dict:
     """Send one message to an agent and return its response."""
     chat_url = f"http://{host}:{port}/chat"
     health_url = f"http://{host}:{port}/health"
 
     # Health check first
     try:
-        health_resp = httpx.get(health_url, timeout=2.0)
-        if health_resp.status_code != 200:
-            raise RuntimeError("Health check failed")
+        async with httpx.AsyncClient() as health_client:
+            health_resp = await health_client.get(health_url, timeout=2.0)
+            if health_resp.status_code != 200:
+                raise RuntimeError("Health check failed")
     except Exception as exc:
         logger.warning(
             "ORCHESTRATOR send_message: health check failed for %s:%d: %s",
@@ -247,21 +248,24 @@ def _send_once(host: str, port: int, message: str, thread_id: str) -> dict:
 
     try:
         response_text = ""
-        with httpx.stream("POST", chat_url, json=payload, timeout=1800.0) as resp:
-            resp.raise_for_status()
-            current_event = None
-            for line in resp.iter_lines():
-                line = line.strip()
-                if not line:
-                    current_event = None
-                    continue
-                if line.startswith("event:"):
-                    current_event = line.split(":", 1)[1].strip()
-                    continue
-                if line.startswith("data:") and current_event == "message":
-                    data = json.loads(line.split(":", 1)[1].strip())
-                    if data.get("type") == "content":
-                        response_text += data["data"]
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST", chat_url, json=payload, timeout=1800.0
+            ) as resp:
+                resp.raise_for_status()
+                current_event = None
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line:
+                        current_event = None
+                        continue
+                    if line.startswith("event:"):
+                        current_event = line.split(":", 1)[1].strip()
+                        continue
+                    if line.startswith("data:") and current_event == "message":
+                        data = json.loads(line.split(":", 1)[1].strip())
+                        if data.get("type") == "content":
+                            response_text += data["data"]
 
         logger.info(
             "ORCHESTRATOR send_message: received response from '%s:%d' (%d chars)",
@@ -280,13 +284,16 @@ def _send_once(host: str, port: int, message: str, thread_id: str) -> dict:
         return {"error": f"Communication with agent failed: {exc}"}
 
 
-def send_message(agent_name: str, message: str) -> str:
+async def send_message(agent_name: str, message: str) -> str:
     """Send a message to a running agent by name and return its full response.
 
     The agent must already be running (started by a supervisor or manually). Use
     `list_agents()` to discover running agents. The same thread_id as the
     ORCHESTRATOR's current conversation is used so that the specialist agent
     shares memory/context with this conversation.
+
+    This function is async so that cancellation (e.g. Discord !stop) propagates
+    to the downstream agent and closes the HTTP connection.
     """
     logger.info("ORCHESTRATOR send_message(agent_name='%s')", agent_name)
 
@@ -313,7 +320,7 @@ def send_message(agent_name: str, message: str) -> str:
 
     last_error: dict | None = None
     for attempt in range(_SEND_RETRIES + 1):
-        result = _send_once(host, port, message, thread_id)
+        result = await _send_once(host, port, message, thread_id)
         if "error" not in result:
             return json.dumps(
                 {
@@ -333,7 +340,7 @@ def send_message(agent_name: str, message: str) -> str:
                 attempt + 1,
                 _SEND_RETRIES,
             )
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
 
     return json.dumps(
         {
