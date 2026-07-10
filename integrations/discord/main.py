@@ -218,15 +218,14 @@ def split_message(text: str, limit: int = MAX_MESSAGE_LENGTH) -> list[str]:
 
 
 async def safe_send(channel: discord.abc.Messageable, text: str) -> bool:
-    """Send a message after stripping whitespace; skip if empty.
+    """Send a message, splitting if long, stripping whitespace, and skipping empties.
 
-    Returns True if a message was actually sent.
+    Returns True if at least one chunk was actually sent.
     """
-    text = text.strip()
-    if not text:
-        return False
-    await channel.send(text)
-    return True
+    chunks = split_message(text, limit=MAX_MESSAGE_LENGTH - 100)
+    for chunk in chunks:
+        await channel.send(chunk)
+    return bool(chunks)
 
 
 def clean_mentions(text: str, bot_user: discord.ClientUser) -> str:
@@ -355,7 +354,7 @@ async def process_agent_request(
 
     if thread_id in busy_threads:
         log("warn", f"Thread {thread_id} is busy; rejecting new message")
-        await channel.send("I'm still working on your last message. Please wait.")
+        await safe_send(channel, "I'm still working on your last message. Please wait.")
         return
 
     busy_threads.add(thread_id)
@@ -429,10 +428,10 @@ async def process_agent_request(
 
         if not sent_something:
             log("warn", "Agent returned empty reply")
-            await channel.send("I didn't get a response from the agent.")
+            await safe_send(channel, "I didn't get a response from the agent.")
     except Exception as exc:
         log("error", f"Failed to handle message: {exc}")
-        await channel.send(f"Sorry, I couldn't process that: {exc}")
+        await safe_send(channel, f"Sorry, I couldn't process that: {exc}")
     finally:
         busy_threads.discard(thread_id)
 
