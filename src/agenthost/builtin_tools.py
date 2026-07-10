@@ -26,6 +26,7 @@ from agenthost.events import (
     run_scheduled_event,
 )
 from agenthost.filesystem_tools import FileSystemTools
+from agenthost.home import get_agenthost_home
 from agenthost.logger import setup_logging
 
 if False:
@@ -346,11 +347,7 @@ class DiscordTools:
             message: The text to send.
             thread_id: The Discord channel ID (or DM channel ID) to send to.
         """
-        bridge_url = (
-            self.config.extra.get("discord_bridge_url")
-            or os.environ.get("DISCORD_BRIDGE_URL")
-            or "http://127.0.0.1:9002/send"
-        )
+        bridge_url = self._bridge_url()
         try:
             response = httpx.post(
                 bridge_url,
@@ -360,19 +357,100 @@ class DiscordTools:
             response.raise_for_status()
 
             # Record the outbound message in memory so the agent remembers sending it.
-            agent = self._agent_provider() if self._agent_provider else None
-            if agent is not None:
-                try:
-                    agent.memory.append_message(
-                        thread_id,
-                        {"role": "assistant", "content": message},
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Failed to record Discord message in memory: %s", exc)
+            self._record_in_memory(thread_id, message)
 
             return json.dumps({"status": "sent", "thread_id": thread_id, "bridge": bridge_url})
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"error": f"Failed to send Discord message: {exc}"})
+
+    def send_discord_file(self, file_path: str, thread_id: str, text: str = "") -> str:
+        """Send a file to Discord as an attachment.
+
+        The file path is resolved relative to the agenthost home directory
+        (the project root). Use this when you have created or received a file
+        and need to deliver it to the user in Discord.
+
+        Args:
+            file_path: Path to the file, relative to the agenthost home directory or absolute.
+            thread_id: The Discord channel ID (or DM channel ID) to send to.
+            text: Optional message to include with the file.
+        """
+        resolved = self._resolve_agenthost_path(file_path)
+        if isinstance(resolved, str):
+            return json.dumps({"error": resolved})
+
+        if not resolved.exists():
+            return json.dumps({"error": f"File not found: {file_path}"})
+        if not resolved.is_file():
+            return json.dumps({"error": f"Path is not a file: {file_path}"})
+
+        bridge_url = self._bridge_url()
+        try:
+            response = httpx.post(
+                bridge_url,
+                json={
+                    "text": text,
+                    "thread_id": thread_id,
+                    "file_path": str(resolved),
+                },
+                timeout=60.0,
+            )
+            response.raise_for_status()
+
+            self._record_in_memory(thread_id, text or f"Sent file: {file_path}")
+
+            return json.dumps(
+                {
+                    "status": "sent",
+                    "thread_id": thread_id,
+                    "file_path": str(resolved),
+                    "bridge": bridge_url,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({"error": f"Failed to send Discord file: {exc}"})
+
+    def _bridge_url(self) -> str:
+        return (
+            self.config.extra.get("discord_bridge_url")
+            or os.environ.get("DISCORD_BRIDGE_URL")
+            or "http://127.0.0.1:9002/send"
+        )
+
+    def _resolve_agenthost_path(self, path: str) -> Path | str:
+        """Resolve a path relative to the agenthost home directory.
+
+        Returns the resolved Path, or an error string if the path is invalid or
+        escapes the agenthost home directory.
+        """
+        if not path:
+            return "Path cannot be empty"
+
+        home = get_agenthost_home()
+        target = Path(path)
+        if target.is_absolute():
+            resolved = target.resolve()
+        else:
+            resolved = (home / target).resolve()
+
+        try:
+            resolved.relative_to(home)
+        except ValueError:
+            return f"Access denied: '{path}' resolves outside the agenthost home directory '{home}'."
+
+        return resolved
+
+    def _record_in_memory(self, thread_id: str, message: str) -> None:
+        """Record an outbound Discord interaction in the agent's memory."""
+        agent = self._agent_provider() if self._agent_provider else None
+        if agent is not None:
+            try:
+                agent.memory.append_message(
+                    thread_id,
+                    {"role": "assistant", "content": message},
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to record Discord message in memory: %s", exc)
 
 
 def build_builtin_tools_prompt(config: AgentConfig) -> str:
@@ -401,16 +479,23 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
             "The thread_id must be the current conversation thread_id, which is shown at the top of the system prompt. "
             "If you are unsure of the current thread_id, call `get_current_thread_id()` first."
         )
+    if "discord" in enabled or "send_discord_file" in enabled:
+        descriptions.append(
+            "- `send_discord_file(file_path, thread_id, text='')`: Send a file attachment to Discord. "
+            "Use this when you have created or received a file and need to deliver it to the user. "
+            "file_path is relative to the agenthost home (project) directory."
+        )
     if "thread" in enabled or "get_current_thread_id" in enabled:
         descriptions.append(
             "- `get_current_thread_id()`: Return the current conversation thread_id. "
             "Use this when a tool like send_discord_message needs a thread_id and you are not certain of it."
         )
-    if "filesystem" in enabled or "read_file" in enabled or "list_uploads" in enabled:
+    if "filesystem" in enabled or "read_file" in enabled:
         descriptions.append(
             "- `read_file(path, max_lines, offset)`: Read a text file inside the project directory. "
             "Use this to read uploaded documents that have been extracted to `.txt` sidecars."
         )
+    if "filesystem" in enabled or "list_uploads" in enabled:
         descriptions.append(
             "- `list_uploads()`: List files in the shared uploads directory, including extracted text sidecars."
         )
@@ -450,6 +535,7 @@ def make_builtin_tools(
         "event_tool": event_tools.event_tool,
         "get_current_datetime": datetime_tools.get_current_datetime,
         "send_discord_message": discord_tools.send_discord_message,
+        "send_discord_file": discord_tools.send_discord_file,
         "get_current_thread_id": thread_tools.get_current_thread_id,
         "read_file": filesystem_tools.read_file,
         "list_uploads": filesystem_tools.list_uploads,
@@ -467,6 +553,7 @@ def make_builtin_tools(
             functions["get_current_datetime"] = available["get_current_datetime"]
         elif item == "discord":
             functions["send_discord_message"] = available["send_discord_message"]
+            functions["send_discord_file"] = available["send_discord_file"]
         elif item == "thread":
             functions["get_current_thread_id"] = available["get_current_thread_id"]
         elif item == "filesystem":

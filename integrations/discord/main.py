@@ -32,6 +32,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from agenthost.filesystem_tools import save_upload_with_text
+from agenthost.home import get_agenthost_home
 
 load_dotenv()
 
@@ -651,17 +652,43 @@ def start_outbound_server() -> aiohttp.web.Application:
         except json.JSONDecodeError:
             return aiohttp.web.json_response({"error": "invalid json"}, status=400)
 
-        text = data.get("text")
+        text = data.get("text") or ""
         thread_id = data.get("thread_id")
-        if not text or not isinstance(text, str):
-            return aiohttp.web.json_response({"error": "missing text"}, status=400)
+        file_path = data.get("file_path")
+
+        if not isinstance(text, str):
+            return aiohttp.web.json_response({"error": "text must be a string"}, status=400)
         if not thread_id or not isinstance(thread_id, str):
             return aiohttp.web.json_response({"error": "missing thread_id"}, status=400)
+        if not text and not file_path:
+            return aiohttp.web.json_response(
+                {"error": "must provide text or file_path"}, status=400
+            )
 
         try:
             channel_id = int(thread_id)
         except ValueError:
             return aiohttp.web.json_response({"error": "thread_id must be a channel ID"}, status=400)
+
+        resolved_file: Path | None = None
+        if file_path:
+            if not isinstance(file_path, str):
+                return aiohttp.web.json_response({"error": "file_path must be a string"}, status=400)
+            home = get_agenthost_home()
+            target = Path(file_path)
+            resolved = target.resolve() if target.is_absolute() else (home / target).resolve()
+            try:
+                resolved.relative_to(home)
+            except ValueError:
+                return aiohttp.web.json_response(
+                    {"error": f"Access denied: '{file_path}' resolves outside the agenthost home directory."},
+                    status=403,
+                )
+            if not resolved.exists():
+                return aiohttp.web.json_response({"error": f"file not found: {file_path}"}, status=404)
+            if not resolved.is_file():
+                return aiohttp.web.json_response({"error": f"path is not a file: {file_path}"}, status=400)
+            resolved_file = resolved
 
         try:
             channel = await bot.fetch_channel(channel_id)
@@ -674,14 +701,25 @@ def start_outbound_server() -> aiohttp.web.Application:
             return aiohttp.web.json_response({"error": str(exc)}, status=500)
 
         try:
-            chunks = split_message(text)
-            sent = 0
-            for chunk in chunks:
-                if await safe_send(channel, chunk):
-                    sent += 1
-            if sent == 0:
-                return aiohttp.web.json_response({"error": "empty message"}, status=400)
-            log("info", f"Outbound /send to channel {channel_id}: {text[:80]}")
+            if resolved_file is not None:
+                file_obj = discord.File(str(resolved_file), filename=resolved_file.name)
+                chunks = split_message(text)
+                if chunks:
+                    await channel.send(chunks[0], file=file_obj)
+                    for chunk in chunks[1:]:
+                        await safe_send(channel, chunk)
+                else:
+                    await channel.send(file=file_obj)
+                log("info", f"Outbound /send file to channel {channel_id}: {resolved_file}")
+            else:
+                chunks = split_message(text)
+                sent = 0
+                for chunk in chunks:
+                    if await safe_send(channel, chunk):
+                        sent += 1
+                if sent == 0:
+                    return aiohttp.web.json_response({"error": "empty message"}, status=400)
+                log("info", f"Outbound /send to channel {channel_id}: {text[:80]}")
             return aiohttp.web.json_response({"ok": True, "thread_id": thread_id})
         except Exception as exc:
             log("error", f"Failed to send Discord message to {channel_id}: {exc}")

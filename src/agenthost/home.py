@@ -1,17 +1,21 @@
-"""Fixed agenthost home directory and derived paths.
+"""Home-directory helpers for agenthost.
 
-The agenthost executable can live anywhere on PATH, but all global state
-(registry, keys, agent aliases) lives in a single fixed home directory.
+Two concepts:
+
+- **Agenthost home**: the fixed project directory (``~/Workspace/agenthost``).
+  All global state lives here: registry, keys, agent aliases, logs.
+- **User home**: the user's home directory (``Path.home()``). Built-in tools such
+  as ``send_discord_file`` can read files from anywhere under this directory.
 """
-
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
 def get_agenthost_home() -> Path:
-    """Return the fixed agenthost home directory."""
-    return Path.home() / "Workspace" / "agenthub"
+    """Return the fixed agenthost home (project) directory."""
+    return Path.home() / "Workspace" / "agenthost"
 
 
 def get_agents_yaml_path() -> Path:
@@ -30,7 +34,39 @@ def get_keys_db_path() -> Path:
 
 
 def ensure_agenthost_home() -> Path:
-    """Create the home directory if it does not exist and return it."""
+    """Create the agenthost home directory if needed and return it."""
     home = get_agenthost_home()
     home.mkdir(parents=True, exist_ok=True)
     return home
+
+
+# User home directory for tools that need broader file access.
+HOME_DIR = Path(os.environ.get("AGENTHOST_HOME", Path.home())).expanduser().resolve()
+
+
+def resolve_home_path(path: str) -> Path:
+    """Resolve a path relative to the user's home directory.
+
+    - Absolute paths are resolved as-is.
+    - Relative paths are resolved relative to ``HOME_DIR``.
+    - ``..`` traversal that escapes ``HOME_DIR`` raises ``ValueError``.
+
+    Returns the resolved ``Path``.
+    """
+    if not path:
+        raise ValueError("Path cannot be empty")
+
+    target = Path(path)
+    if target.is_absolute():
+        resolved = target.resolve()
+    else:
+        resolved = (HOME_DIR / target).resolve()
+
+    try:
+        resolved.relative_to(HOME_DIR)
+    except ValueError as exc:
+        raise ValueError(
+            f"Access denied: '{path}' resolves outside the home directory '{HOME_DIR}'."
+        ) from exc
+
+    return resolved
