@@ -119,6 +119,7 @@ def search_messages(
     query : str
         Gmail search query (e.g. ``"from:alice@example.com is:unread"``).
         See ``skills/gmail-search.md`` for the full syntax reference.
+        To search for emails within a specific time in Gmail, use the after:, before:, older_than:, or newer_than: operators in the search bar. You can specify exact dates (YYYY/MM/DD format) or use Unix timestamps for second-level precision.Date and Time OperatorsUse these standard commands directly in the Gmail search box:Specific Date Ranges: Type after:2026/01/01 before:2026/02/01 to find emails between January 1 and February 1, 2026.Time Relatives: Use older_than:7d or newer_than:30d for rolling windows using d (days), m (months), and y (years).Exact Time: For exact timestamps (e.g., to narrow down a 15-minute window), convert your dates to Unix Epoch time and query using after:TIMESTAMP before:TIMESTAMP.
     max_results : int, optional
         Maximum number of messages to return (1-500). Default 20.
     include_spam_trash : bool, optional
