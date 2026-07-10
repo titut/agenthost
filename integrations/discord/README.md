@@ -88,6 +88,8 @@ Send the bot a direct message. It forwards every DM to the agent and replies.
 
 - `!id` — the bot replies with your Discord user ID (useful for `ALLOWED_USER_IDS`).
 - `!start` — shows help.
+- `!stop` — cancels an in-progress agent response in the current channel.
+- `!clear` — clears conversation memory for all agents in the current channel.
 
 ## Access control
 

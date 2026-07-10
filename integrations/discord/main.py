@@ -322,8 +322,8 @@ intents.messages = True
 # Use '!' prefix for commands so they don't clash with Discord slash commands in guilds.
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Track threads with in-flight agent requests.
-busy_threads: set[str | int] = set()
+# Track active agent request tasks per thread_id so !stop can cancel them.
+active_tasks: dict[str, asyncio.Task] = {}
 
 
 @bot.event
@@ -357,6 +357,18 @@ async def clear_command(ctx: commands.Context) -> None:
     if failed:
         msg += f" Failed: {', '.join(failed)}."
     await ctx.reply(msg)
+
+
+@bot.command(name="stop")
+async def stop_command(ctx: commands.Context) -> None:
+    """Cancel an in-progress agent response in this channel."""
+    thread_id = str(ctx.channel.id)
+    task = active_tasks.get(thread_id)
+    if task is None:
+        await ctx.reply("No active agent request to stop in this channel.")
+        return
+    task.cancel()
+    await ctx.reply("⏹️ Stopping the agent...")
 
 
 @bot.event
@@ -393,7 +405,7 @@ async def handle_dm(message: discord.Message) -> None:
 
     thread_id = str(message.channel.id)
     prompt = await build_prompt_with_attachments(message)
-    await process_agent_request(
+    await run_agent_request_task(
         channel=message.channel,
         thread_id=thread_id,
         prompt=prompt,
@@ -431,7 +443,7 @@ async def handle_guild_message(message: discord.Message) -> None:
 
     thread_id = str(message.channel.id)
     prompt = await build_prompt_with_attachments(message, base_prompt=prompt)
-    await process_agent_request(
+    await run_agent_request_task(
         channel=message.channel,
         thread_id=thread_id,
         prompt=prompt,
@@ -506,6 +518,37 @@ async def build_prompt_with_attachments(
     return full_prompt
 
 
+async def run_agent_request_task(
+    channel: discord.abc.Messageable,
+    thread_id: str,
+    prompt: str,
+    author: discord.User | discord.Member,
+) -> None:
+    """Create and track an agent request task so !stop can cancel it."""
+    if thread_id in active_tasks:
+        log("warn", f"Thread {thread_id} is busy; rejecting new message")
+        await safe_send(channel, "I'm still working on your last message. Please wait.")
+        return
+
+    task = asyncio.create_task(
+        process_agent_request(
+            channel=channel,
+            thread_id=thread_id,
+            prompt=prompt,
+            author=author,
+        )
+    )
+    active_tasks[thread_id] = task
+    try:
+        await task
+    except asyncio.CancelledError:
+        # The !stop command cancelled the task. process_agent_request handles
+        # sending the stopped confirmation.
+        pass
+    finally:
+        active_tasks.pop(thread_id, None)
+
+
 async def process_agent_request(
     channel: discord.abc.Messageable,
     thread_id: str,
@@ -514,13 +557,6 @@ async def process_agent_request(
 ) -> None:
     """Forward a prompt to the agent and stream the reply back to Discord."""
     log("info", f"user={author} thread_id={thread_id}: {prompt[:80]}")
-
-    if thread_id in busy_threads:
-        log("warn", f"Thread {thread_id} is busy; rejecting new message")
-        await safe_send(channel, "I'm still working on your last message. Please wait.")
-        return
-
-    busy_threads.add(thread_id)
     content_buffer = ""
     sent_something = False
 
@@ -592,11 +628,16 @@ async def process_agent_request(
         if not sent_something:
             log("warn", "Agent returned empty reply")
             await safe_send(channel, "I didn't get a response from the agent.")
+    except asyncio.CancelledError:
+        log("info", f"Agent request for thread {thread_id} was cancelled")
+        await flush_buffer(force=True)
+        await safe_send(channel, "⏹️ Agent stopped.")
     except Exception as exc:
         log("error", f"Failed to handle message: {exc}")
         await safe_send(channel, f"Sorry, I couldn't process that: {exc}")
     finally:
-        busy_threads.discard(thread_id)
+        # Nothing to clean up here; run_agent_request_task manages active_tasks.
+        pass
 
 
 def start_outbound_server() -> aiohttp.web.Application:
