@@ -37,6 +37,9 @@ class Agent:
         self.tool_schemas, self.tool_runner = discover_tools(config.tools_dir, builtins, config=config)
         self.system_prompt_initial = config.system_prompt + build_builtin_tools_prompt(config)
         self.system_prompt_final = config.critical_instructions
+        # Buffer the entire assistant response for orchestrator agents so we can
+        # apply a post-processing sanitizer before streaming it to clients.
+        self._buffer_content = config.orchestrator
 
     async def chat(self, thread_id: str, user_message: str) -> AsyncIterator[str]:
         # Expose the current thread_id to built-in tools that need it.
@@ -180,7 +183,8 @@ class Agent:
                             before = raw[:start]
                             if before:
                                 assistant_content += before
-                                yield json.dumps({"type": "content", "data": before}) + "\n"
+                                if not self._buffer_content:
+                                    yield json.dumps({"type": "content", "data": before}) + "\n"
                             raw = raw[start + len("<think>"):]
                             end = raw.find("</think>")
                             if end == -1:
@@ -196,7 +200,8 @@ class Agent:
 
                         if raw:
                             assistant_content += raw
-                            yield json.dumps({"type": "content", "data": raw}) + "\n"
+                            if not self._buffer_content:
+                                yield json.dumps({"type": "content", "data": raw}) + "\n"
 
                     if delta.tool_calls:
                         for tc in delta.tool_calls:
@@ -231,6 +236,21 @@ class Agent:
                     thread_id,
                 )
                 raise
+
+            if assistant_content and self._buffer_content:
+                sanitized = self._sanitize_output(assistant_content)
+                if sanitized != assistant_content:
+                    logger.warning(
+                        "Sanitized degenerate output tail for agent '%s' thread '%s' "
+                        "(%d -> %d chars)",
+                        self.config.name,
+                        thread_id,
+                        len(assistant_content),
+                        len(sanitized),
+                    )
+                assistant_content = sanitized
+                for chunk in self._chunk_text(assistant_content, chunk_size=1000):
+                    yield json.dumps({"type": "content", "data": chunk}) + "\n"
 
             if tool_calls:
                 tool_round += 1
@@ -642,3 +662,72 @@ class Agent:
             pass
 
         return {}
+
+    @staticmethod
+    def _sanitize_output(text: str, max_tail_words_without_period: int = 8) -> str:
+        """Trim degenerate trailing text such as synonym chains.
+
+        If the final run of words after the last sentence-ending punctuation is
+        longer than the threshold, truncate back to that punctuation. This is a
+        safety net for models that keep generating related words instead of stopping.
+
+        Code blocks and very short tails are left untouched.
+        """
+        text = text.rstrip()
+        if not text:
+            return text
+
+        # Preserve complete code blocks and other structured endings.
+        if text.endswith("```"):
+            return text
+
+        punct = ".!?。！？"
+        last_punct_idx = max((text.rfind(c) for c in punct), default=-1)
+        if last_punct_idx <= 0:
+            return text
+
+        tail = text[last_punct_idx + 1 :]
+        words = tail.split()
+        if len(words) > max_tail_words_without_period:
+            # Include trailing quote/parenthesis/bracket characters after the
+            # punctuation, then strip any trailing whitespace.
+            end = last_punct_idx + 1
+            while end < len(text) and text[end] in "'\"\u201d\u2019)]} ":
+                end += 1
+            return text[:end].rstrip()
+
+        return text
+
+    @staticmethod
+    def _chunk_text(text: str, chunk_size: int = 1000) -> list[str]:
+        """Split text into chunks without breaking paragraphs or code blocks.
+
+        Prefers breaks at paragraph boundaries, then line boundaries, then
+        falls back to the requested size. This keeps streamed output readable
+        while avoiding single enormous SSE events.
+        """
+        if not text:
+            return []
+        if len(text) <= chunk_size:
+            return [text]
+
+        chunks: list[str] = []
+        i = 0
+        while i < len(text):
+            end = min(i + chunk_size, len(text))
+            if end < len(text):
+                search_start = i + int(chunk_size * 0.8)
+                paragraph_break = text.rfind("\n\n", search_start, end)
+                if paragraph_break != -1:
+                    end = paragraph_break + 2
+                else:
+                    line_break = text.rfind("\n", search_start, end)
+                    if line_break != -1:
+                        end = line_break + 1
+                    else:
+                        space_break = text.rfind(" ", search_start, end)
+                        if space_break != -1:
+                            end = space_break + 1
+            chunks.append(text[i:end])
+            i = end
+        return chunks

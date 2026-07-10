@@ -40,10 +40,10 @@ agenthost supports **coordinated multi-agent workflows** via the **ORCHESTRATOR*
 2. The ORCHESTRATOR decomposes it into phases and steps
 3. It reads agent folders to match capabilities to each step
 4. It presents the plan for user approval
-5. It spawns agents, sends them messages, gathers results, and despawns them
+5. It discovers running agents with `list_agents()`, sends them messages, and gathers results
 6. It adapts on failure, retries when appropriate, and synthesizes final output
 
-Running agents are tracked in a process registry at `~/.agenthost-registry.json` with PID-based health filtering. Zombie entries are automatically cleaned up on `list`.
+Agents are expected to be started outside the ORCHESTRATOR (e.g., by a supervisor, systemd, docker-compose, or manually). The ORCHESTRATOR uses `agenthost list` to discover active agents and their ports.
 
 ### Design → Build → Test Pipeline
 
@@ -216,7 +216,7 @@ agents:
   RESEARCHER: /home/koroko/Workspace/agenthub/agents/RESEARCHER
 ```
 
-Aliases are resolved by `agenthost serve <alias>` and by the ORCHESTRATOR's lifecycle tools.
+Aliases are resolved by `agenthost serve <alias>` and by the ORCHESTRATOR when it builds its roster of available agents.
 
 ### `agenthost key list|add|edit`
 
@@ -241,26 +241,23 @@ The database is created automatically on first `add`. On `edit`, if `--name` is 
 
 ## Available Agents
 
-### ORCHESTRATOR — Generalist Planning & Lifecycle Manager
+### ORCHESTRATOR — Generalist Planning & Coordination Manager
 
 The ORCHESTRATOR takes any request, decomposes it into ordered steps, assigns the right agents, gets user approval, and executes the plan while tracking progress and adapting to failures.
 
 **Personality:** Domain-agnostic, methodical, user-in-the-loop.
 
 **Tools:**
-- `spawn_agent(name)` — Start an agent process (max 3 concurrent)
-- `send_message(agent_id, message)` — Give a task to a running agent
-- `despawn_agent(agent_id)` — Stop an agent gracefully
-- `list_agents()` — Check which agents are currently running
-- `list_available_agents()` — Discover what agent folders exist
+- `list_agents()` — Discover running agents via `agenthost list`
+- `send_message(agent_name, message)` — Give a task to a running agent
 - `read_agent_folder(name)` — Inspect an agent's persona, tools, and skills
 - `plan_save(key, json)` — Store a plan in the KV store
 - `plan_load(key)` — Retrieve a stored plan
 - `plan_delete(key)` — Remove a plan from storage
 
-**Skills:** `planning.md` — coarse-to-fine decomposition, agent matching, execution tracking; `agent-lifecycle.md` — spawn/monitor/despawn patterns.
+**Skills:** `planning.md` — coarse-to-fine decomposition, agent matching, execution tracking; `agent-lifecycle.md` — discover/message/reuse patterns.
 
-**Config:** Model `deepseek-v4-flash`, temperature `0.3`, max 3 concurrent agents.
+**Config:** Model `Qwen/Qwen3-235B-A22B-Instruct-2507`, temperature `0.4`.
 
 ### RESEARCHER — Research Assistant
 
@@ -335,7 +332,7 @@ User Request
 │  • Decomposes request into phases and steps          │
 │  • Reads agent folders to match capabilities         │
 │  • Presents plan to user for approval                │
-│  • Spawns agents, tracks progress, handles failures  │
+│  • Discovers agents, tracks progress, handles failures  │
 │  • Max 3 concurrent agents                           │
 │  • Uses SQLite KV store for plan persistence         │
 └─────────────────────────────────────────────────────┘

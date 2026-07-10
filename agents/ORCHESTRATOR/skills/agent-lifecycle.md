@@ -1,10 +1,10 @@
 # Description
 
-Operational basics for managing agent processes: spawn, message, despawn, and reuse.
+Operational basics for working with pre-running agents: discovery, messaging, reuse, and graceful failure handling.
 
 # Agent Lifecycle Guidance
 
-This skill covers the operational basics of managing agent processes.
+This skill covers the operational basics of delegating work to specialist agents.
 For planning, decomposition, and execution strategy, see **planning.md**.
 
 ---
@@ -14,7 +14,7 @@ For planning, decomposition, and execution strategy, see **planning.md**.
 - Read multiple agents before choosing one. Call `read_agent_folder("<name>")`
   to inspect an agent's persona, tools, and skills.
 - Re-read an agent folder if you are unsure of its capabilities.
-- You can read agent folders without spawning them — this is free.
+- You can read agent folders without messaging them — this is free.
 
 ## Choosing an Agent
 
@@ -24,33 +24,35 @@ not assume from the agent name alone. Read the persona (WHOAMI.md), the tools
 
 If no existing agent fits the task, explain the gap to the user.
 
-## Managing the 3-Agent Limit
+## Discovering Running Agents
 
-- Before spawning, always call `list_agents()` to check current usage.
-- If at the limit, finish and despawn an idle agent before spawning a new one.
-- Despawn agents as soon as their final step is complete.
+- Agents are started outside the ORCHESTRATOR (e.g., by a supervisor or manually).
+- Call `list_agents()` to see which agents are currently running, their host, and
+  their port.
+- If an agent you need is not running, tell the user which agent is missing and
+  that it needs to be started. Do not try to start it yourself.
 
 ## Conversation Memory Per Agent
 
-- `send_message` reuses the same `thread_id` for the lifetime of a spawned
-  agent. The agent remembers all messages exchanged while it is running.
-- When you despawn an agent, its conversation memory is gone.
-- A newly spawned agent (even with the same name) starts with a fresh thread.
-- When sending a task to a newly spawned replacement, include a concise summary
-  of prior progress — it has no memory of the previous session.
+- `send_message(agent_name, message)` uses the same `thread_id` as the current
+  ORCHESTRATOR conversation. The specialist agent shares the thread context with
+  this conversation.
+- Agents remember all messages exchanged in the same thread.
+- If you need to reset an agent's memory for the current thread, ask the user to
+  run `!clear` (Discord) or `/clear` (TUI).
 
 ## Agent Reuse
 
-If the same agent type is needed for consecutive steps, **keep the process
-alive**. Do not despawn and re-spawn. Just send a new message to the same
-`agent_id`. The agent retains context from earlier messages in the same thread.
+If the same agent type is needed for consecutive steps, just call
+`send_message(agent_name, message)` again. The agent retains context from earlier
+messages in the same thread.
 
 ## Error Handling
 
-- If `send_message` reports an agent is not responding, check its health via
-  health endpoint, then despawn and either re-spawn or use an alternative agent.
-- If `spawn_agent` fails, run `agenthost list` manually to see if the agent
-  started despite the error.
+- If `send_message` reports an agent is not responding, inform the user briefly
+  and offer to retry, try a different agent, or continue without that agent.
+- If `list_agents()` does not show the agent you need, tell the user it needs to
+  be started.
 - Never read `.agenthost-registry.json` directly — use the provided tools.
 
 ## Domain Independence

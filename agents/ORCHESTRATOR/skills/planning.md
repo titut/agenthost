@@ -13,7 +13,7 @@ to failures.
 step, more than one agent, or any kind of structured output, you MUST create a
 plan with `plan_save` before doing anything else. Update the plan with
 `plan_save` after every completed step. Load the plan with `plan_load` whenever
-you resume work or need to decide what to do next. Do not spawn agents without a
+you resume work or need to decide what to do next. Do not delegate work without a
 stored plan.
 
 This skill applies to **any domain** — research, creative work, data analysis,
@@ -32,8 +32,8 @@ You are not tied to software development patterns.
 4. **User in the loop** — Always present the plan for approval before executing.
 5. **Track everything** — Store the plan in your KV store and update it as you
    execute each step.
-6. **Reuse agents** — Keep agents alive between steps if they'll be needed
-   again. Only despawn when their work is completely done.
+6. **Reuse agents** — Send multiple tasks to the same agent across consecutive
+   steps. Agents are long-running; you do not start or stop them.
 
 ---
 
@@ -50,7 +50,7 @@ When the user gives you a task, analyze it before touching any agents.
   summarization)
 - **Constraints** — Any limits on time, scope, or approach?
 
-Do not spawn any agents yet. This is a thinking phase.
+Do not message any agents yet. This is a thinking phase.
 
 ---
 
@@ -118,9 +118,7 @@ on names — read their actual descriptions.
 - Use **parallelism** only when ALL of the following are true:
   - Two or more steps have no dependency on each other
   - They require **different** agents
-  - You have available agent slots (max 3 concurrent agents)
-- When running in parallel, check `list_agents()` before each spawn to
-  confirm you are under the limit.
+  - Both agents are running (check `list_agents()`)
 
 **Example ordering logic:**
 
@@ -132,10 +130,10 @@ Step 1 (RESEARCHER)          Step 2 (RESEARCHER)
     Step 4 (SW_DEV) ← depends on both 3 and 2
 ```
 
-Here steps 1 and 2 can run in parallel (different agents doesn't apply since
-both need RESEARCHER, but they share no dependency). Since they use the same
-agent, they run sequentially — you send one message, get the result, then send
-the next. Then step 3 can run, then step 4.
+Here steps 1 and 2 can run in parallel if they use different agents and both
+are running. Since they use the same agent (RESEARCHER), they run sequentially —
+you send one message, get the result, then send the next. Then step 3 can run,
+then step 4.
 
 ---
 
@@ -175,9 +173,9 @@ Once approved, execute the plan systematically.
 For each ready-to-run step (in dependency order):
 
   1. Check availability
-     - If the assigned agent is already running → reuse it (same agent_id)
-     - If not running → call list_agents() to confirm slot, then spawn_agent()
-     - If at 3-agent limit → finish/despawn an idle agent first
+     - Call list_agents() to see which agents are running
+     - If the assigned agent is not running → inform the user and offer to retry
+       or continue without that step
 
   2. Prepare context
      - Collect results and context summaries from completed dependency steps
@@ -187,27 +185,24 @@ For each ready-to-run step (in dependency order):
        * Deliverable (what to produce)
 
   3. Send message
-     - Use send_message(agent_id, message)
+     - Use send_message(agent_name, message)
      - Wait for the full response
 
   4. Extract result
      - Read the agent's response
      - Summarize the key output
+     - If the response contains an error, choose a recovery strategy
 
   5. Update plan in KV store
      - Set step status to "completed" (or "failed")
      - Store result summary
      - Store context_for_next for downstream steps
-
-  6. Decide on agent lifecycle
-     - If this agent has more steps in the plan → keep alive
-     - If this agent has no more steps → despawn_agent() to free slot
 ```
 
 ### Context Passing Between Steps
 
-This is critical. Each spawned agent has its own conversation memory — it does
-not know what other agents did. You must bridge the gap.
+This is critical. Each agent has its own conversation memory — it does not know
+what other agents did. You must bridge the gap.
 
 When messaging an agent, include a structured preamble:
 
@@ -230,15 +225,13 @@ Here is what has been done so far:
 
 ### Agent Reuse Pattern
 
-If the same agent is assigned to consecutive steps, **do not despawn between
-them**. Keep the agent running and just call `send_message` again with the new
-task. The agent's thread preserves the conversation context from the previous
-step.
+If the same agent is assigned to consecutive steps, just call `send_message`
+again with the new task. The agent's thread preserves the conversation context
+from the previous step. You do not manage agent lifecycle — they are started
+and kept running outside the ORCHESTRATOR.
 
-Despawn an agent only when:
-- It has no remaining steps in the plan
-- You need to free its slot for a different agent
-- It is unhealthy (not responding to health checks)
+If an agent is unhealthy (not responding to health checks), inform the user and
+offer to retry or continue without that agent.
 
 ---
 
@@ -252,7 +245,7 @@ When a step fails:
 
    | Strategy | When to use |
    |----------|-------------|
-   | **Retry** | The failure seems transient or the agent needed clearer instructions. Re-spawn or re-message with the error included. |
+   | **Retry** | The failure seems transient or the agent needed clearer instructions. Re-message with the error included. |
    | **Skip** | The step's output is not critical to downstream steps. Mark as `skipped` and continue. |
    | **Alternative agent** | Another agent has overlapping capabilities. Reassign the step. |
    | **Escalate** | The failure blocks everything. Present the situation to the user with options. |

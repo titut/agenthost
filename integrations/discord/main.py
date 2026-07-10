@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 import sys
 from collections.abc import AsyncIterator
 from typing import Any
@@ -92,6 +93,64 @@ async def check_agent_health() -> dict[str, Any]:
             log("error", f"Agent health check failed: {exc}")
             log("error", f"Make sure the agent is running and reachable at {AGENT_CHAT_URL}")
             raise
+
+
+def _run_agenthost_list() -> list[dict[str, object]]:
+    """Run `agenthost list` and parse its output into active agent records."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "agenthost", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10.0,
+        )
+    except Exception as exc:
+        log("warn", f"`agenthost list` failed: {exc}")
+        return []
+
+    lines = result.stdout.strip().splitlines()
+    agents: list[dict[str, object]] = []
+    for line in lines[2:]:
+        parts = line.split()
+        if len(parts) >= 5:
+            try:
+                agents.append(
+                    {
+                        "name": parts[0],
+                        "host": parts[1],
+                        "port": int(parts[2]),
+                        "pid": int(parts[3]),
+                        "path": " ".join(parts[4:]),
+                    }
+                )
+            except ValueError:
+                continue
+    return agents
+
+
+async def clear_agents_for_thread(thread_id: str) -> tuple[int, list[str], list[str]]:
+    """Call /clear on every active agent for the given thread_id."""
+    active = _run_agenthost_list()
+    cleared: list[str] = []
+    failed: list[str] = []
+    for entry in active:
+        host = str(entry.get("host", "127.0.0.1"))
+        port = int(entry["port"])
+        name = str(entry["name"])
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"http://{host}:{port}/clear",
+                    json={"message": "", "thread_id": thread_id},
+                    timeout=5.0,
+                )
+                resp.raise_for_status()
+                cleared.append(name)
+        except Exception as exc:
+            log("warn", f"Failed to clear agent '{name}' for thread '{thread_id}': {exc}")
+            failed.append(name)
+    return len(active), cleared, failed
 
 
 async def stream_agent_events(
@@ -266,8 +325,20 @@ async def start_command(ctx: commands.Context) -> None:
     """Welcome / help command."""
     await ctx.reply(
         "Mention me in a server or send me a DM and I'll forward it to the agent.\n"
-        f"Your user ID is `{ctx.author.id}`."
+        f"Your user ID is `{ctx.author.id}`.\n"
+        "Use `!clear` to clear the conversation memory in this channel."
     )
+
+
+@bot.command(name="clear")
+async def clear_command(ctx: commands.Context) -> None:
+    """Clear conversation memory for all active agents in this channel."""
+    thread_id = str(ctx.channel.id)
+    total, cleared, failed = await clear_agents_for_thread(thread_id)
+    msg = f"Cleared memory for {len(cleared)}/{total} agents in this channel."
+    if failed:
+        msg += f" Failed: {', '.join(failed)}."
+    await ctx.reply(msg)
 
 
 @bot.event
@@ -277,6 +348,11 @@ async def on_message(message: discord.Message) -> None:
 
     # Let command handlers run first.
     await bot.process_commands(message)
+
+    # If this message was a command (starts with the command prefix), do not
+    # forward it to the agent.
+    if message.content.startswith(bot.command_prefix):
+        return
 
     # Access control by user ID.
     if ALLOWED_USER_IDS and str(message.author.id) not in ALLOWED_USER_IDS:
