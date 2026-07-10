@@ -356,31 +356,32 @@ def _get_memory() -> tuple:
     return memory, config
 
 
-def plan_save(key: str, plan: dict[str, Any]) -> str:
+def plan_save(
+    key: str,
+    plan_id: str,
+    status: str,
+    request: str,
+    coarse_steps: list[dict[str, str]],
+    fine_steps: list[dict[str, Any]],
+) -> str:
     """Save a plan to the ORCHESTRATOR's KV store.
 
     The key should follow the format 'plan:<plan_id>' for plans.
-    Pass the plan as a structured object, not as a JSON string. The required
-    top-level fields are: plan_id, status, request, coarse_steps, fine_steps.
+    Pass each top-level field as its own parameter; do not wrap the whole plan
+    in a JSON string. The coarse_steps and fine_steps are lists of objects.
 
     Returns a confirmation or error message.
     """
-    if not isinstance(plan, dict):
-        # Defensive: some providers may still pass a string despite the schema.
-        if isinstance(plan, str):
-            try:
-                plan = json.loads(plan)
-            except json.JSONDecodeError as exc:
-                return json.dumps({"error": f"Invalid JSON: {exc}"})
-        else:
-            return json.dumps({"error": "plan must be an object, not a string"})
+    plan = {
+        "plan_id": plan_id,
+        "status": status,
+        "request": request,
+        "coarse_steps": coarse_steps or [],
+        "fine_steps": fine_steps or [],
+    }
 
-    required = {"plan_id", "status", "request", "coarse_steps", "fine_steps"}
-    missing = required - plan.keys()
-    if missing:
-        return json.dumps(
-            {"error": f"Plan is missing required fields: {sorted(missing)}"}
-        )
+    if not fine_steps:
+        return json.dumps({"error": "fine_steps cannot be empty"})
 
     try:
         memory, _config = _get_memory()

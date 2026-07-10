@@ -7,6 +7,7 @@ import importlib.util
 import inspect
 import json
 import sys
+import unicodedata
 from abc import ABC, abstractmethod
 from pathlib import Path
 from types import ModuleType
@@ -155,8 +156,44 @@ def _missing_required_args(fn: Callable[..., Any], arguments: dict[str, Any]) ->
     return missing
 
 
+def _normalize_text(text: str) -> str:
+    """Normalize text to avoid homoglyph / zero-width token corruption.
+
+    Some models (especially with high repetition penalties) substitute common
+    characters with visually similar Unicode compatibility characters such as
+    ligatures (ﬁ), soft hyphens, or combining joiners. NFKC normalization
+    collapses these back to their standard forms; we then strip known invisible
+    formatting characters so tool argument keys/values match the expected schema.
+    """
+    import re
+
+    normalized = unicodedata.normalize("NFKC", text)
+    # Strip invisible/formatting characters that models use to evade penalties:
+    # soft hyphen, CGJ, zero-width spaces/joiners, bidi marks, variation
+    # selectors, and the BOM.
+    invisible = re.compile(
+        "[\xad\u034f\u200b-\u200f\u202a-\u202e\ufe00-\ufe0f\ufeff]"
+    )
+    return invisible.sub("", normalized)
+
+
+def _normalize_argument_strings(obj: Any) -> Any:
+    """Recursively normalize all string keys and values in a JSON-like object."""
+    if isinstance(obj, str):
+        return _normalize_text(obj)
+    if isinstance(obj, dict):
+        return {
+            _normalize_text(k): _normalize_argument_strings(v)
+            for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_normalize_argument_strings(v) for v in obj]
+    return obj
+
+
 def _coerce_arguments(fn: Callable[..., Any], arguments: dict[str, Any]) -> dict[str, Any]:
     """Coerce string arguments from the LLM into the function's annotated types."""
+    arguments = _normalize_argument_strings(arguments)
     hints = _resolve_type_hints(fn)
     coerced: dict[str, Any] = {}
 

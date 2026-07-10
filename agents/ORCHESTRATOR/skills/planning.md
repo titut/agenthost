@@ -164,7 +164,7 @@ Once approved, execute the plan systematically.
 ### Before First Step
 
 1. Generate a `plan_id` (format: `plan_<short_hash>`).
-2. Store the full plan in your KV store using `plan_save("plan:<plan_id>", plan)`. Pass the plan as a structured object; do not stringify it.
+2. Store the full plan in your KV store using `plan_save()` with each top-level field as its own argument. Do not wrap the plan in a JSON string.
 3. Set plan `status` to `"approved"`.
 
 ### Step Execution Loop
@@ -315,21 +315,18 @@ Store plans in your KV store under key `plan:<plan_id>`. Use this structure:
 }
 ```
 
-Use `plan_save("plan:<plan_id>", plan)` to store the plan as a structured
-object. `plan_load("plan:<plan_id>")` returns the stored object directly — do
-not wrap it in `json.dumps` or `json.loads`.
+Use `plan_save()` with each top-level field as its own parameter. Do not wrap
+the whole plan in a JSON string.
 
 Example tool call:
 
 ```
 plan_save(
   key="plan:abc123",
-  plan={
-    "plan_id": "plan_abc123",
-    "status": "approved",
-    "request": "Research the life of Jack Ma",
-    "coarse_steps": [...],
-    "fine_steps": [...]
-  }
+  plan_id="plan_abc123",
+  status="approved",
+  request="Research the life of Jack Ma",
+  coarse_steps=[...],
+  fine_steps=[...]
 )
 ```
