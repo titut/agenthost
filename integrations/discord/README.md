@@ -25,6 +25,7 @@ Trade-offs:
    - Select scope `bot`.
    - Select permissions:
      - Send Messages
+     - Attach Files
      - Read Message History
      - Read Messages / View Channels
    - Copy the generated URL and open it in your browser to invite the bot to your server.

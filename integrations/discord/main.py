@@ -658,8 +658,12 @@ def start_outbound_server() -> aiohttp.web.Application:
 
         if not isinstance(text, str):
             return aiohttp.web.json_response({"error": "text must be a string"}, status=400)
-        if not thread_id or not isinstance(thread_id, str):
+        if thread_id is None:
             return aiohttp.web.json_response({"error": "missing thread_id"}, status=400)
+        if isinstance(thread_id, int):
+            thread_id = str(thread_id)
+        if not isinstance(thread_id, str):
+            return aiohttp.web.json_response({"error": "thread_id must be a string or integer"}, status=400)
         if not text and not file_path:
             return aiohttp.web.json_response(
                 {"error": "must provide text or file_path"}, status=400
@@ -721,6 +725,16 @@ def start_outbound_server() -> aiohttp.web.Application:
                     return aiohttp.web.json_response({"error": "empty message"}, status=400)
                 log("info", f"Outbound /send to channel {channel_id}: {text[:80]}")
             return aiohttp.web.json_response({"ok": True, "thread_id": thread_id})
+        except discord.HTTPException as exc:
+            detail = getattr(exc, "text", str(exc))
+            log(
+                "error",
+                f"Failed to send Discord message to {channel_id}: HTTP {exc.status} code {exc.code}: {detail}",
+            )
+            return aiohttp.web.json_response(
+                {"error": f"Discord API error {exc.status}: {detail}"},
+                status=500,
+            )
         except Exception as exc:
             log("error", f"Failed to send Discord message to {channel_id}: {exc}")
             return aiohttp.web.json_response({"error": str(exc)}, status=500)
