@@ -17,6 +17,7 @@ Gmail search uses the same query syntax as the Gmail web interface. The `search_
 | `subject:` | `subject:meeting` | Messages with "meeting" in the subject |
 | `after:` | `after:2025/01/01` | Messages after a date (YYYY/MM/DD) |
 | `before:` | `before:2025/03/01` | Messages before a date (YYYY/MM/DD) |
+| `newer_than:` | `newer_than:0.5d` | Messages newer than a relative time (e.g. `0.5d` = last 12 hours) |
 | `has:` | `has:attachment` | Messages with attachments |
 | `is:` | `is:unread`, `is:read`, `is:starred`, `is:important` | Messages by state |
 | `label:` | `label:inbox`, `label:my-label` | Messages with a specific label |
@@ -50,6 +51,7 @@ body:"meeting at 3pm"
 |--------|-------|
 | Unread from a specific person | `from:alice@example.com is:unread` |
 | Recent messages with attachments | `after:2025/01/01 has:attachment` |
+| Messages from the last 12 hours | `newer_than:0.5d` |
 | Everything except newsletters | `-from:newsletter@example.com in:inbox` |
 | Messages about a topic | `subject:"quarterly review" after:2025/02/01` |
 | All drafts | `in:drafts` |
