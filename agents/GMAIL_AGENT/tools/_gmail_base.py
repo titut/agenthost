@@ -48,29 +48,12 @@ _REQUIRED_ENV_VARS = ("GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET", "GMAIL_REFRESH_T
 # ---------------------------------------------------------------------------
 
 
-def get_gmail_service() -> dict:
-    """Build and return a cached Gmail API v1 service.
+def _read_gmail_credentials() -> dict:
+    """Read and validate Gmail OAuth credentials from the environment.
 
-    Reads ``GMAIL_CLIENT_ID``, ``GMAIL_CLIENT_SECRET``, and
-    ``GMAIL_REFRESH_TOKEN`` from the process environment, constructs OAuth2
-    credentials, and returns a ``Resource`` via
-    ``googleapiclient.discovery.build("gmail", "v1", ...)``.
-
-    The service is cached in a module-level variable so subsequent calls in
-    the same session are nearly free.
-
-    Returns (per §8.2 of the architecture spec):
-        ``{"success": True, "service": <Resource>}`` on success, **or**
-        ``{"error": "<message>", "missing_vars": [...], "detail": "..."}`` on
-        failure.
+    Returns {"client_id": ..., "client_secret": ..., "refresh_token": ...}
+    on success, or {"error": ..., "missing_vars": [...]} on failure.
     """
-    global _service
-
-    # ---- Return cached service if available -------------------------------
-    if _service is not None:
-        return {"success": True, "service": _service}
-
-    # ---- Read environment variables --------------------------------------
     client_id = os.environ.get("GMAIL_CLIENT_ID", "").strip()
     client_secret = os.environ.get("GMAIL_CLIENT_SECRET", "").strip()
     refresh_token = os.environ.get("GMAIL_REFRESH_TOKEN", "").strip()
@@ -88,6 +71,33 @@ def get_gmail_service() -> dict:
             "error": f"Missing required env var(s): {', '.join(missing)}",
             "missing_vars": missing,
         }
+
+    return {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+    }
+
+
+def build_gmail_service() -> dict:
+    """Build a fresh Gmail API v1 service.
+
+    Unlike ``get_gmail_service()``, this always creates a new ``Resource``
+    instance. Use this in worker threads where the shared cached service would
+    not be thread-safe.
+
+    Returns:
+        ``{"success": True, "service": <Resource>}`` on success, **or**
+        ``{"error": "<message>", "missing_vars": [...], "detail": "..."}`` on
+        failure.
+    """
+    creds_result = _read_gmail_credentials()
+    if "error" in creds_result:
+        return creds_result
+
+    client_id = creds_result["client_id"]
+    client_secret = creds_result["client_secret"]
+    refresh_token = creds_result["refresh_token"]
 
     # ---- Build Credentials object ----------------------------------------
     try:
@@ -124,13 +134,41 @@ def get_gmail_service() -> dict:
 
     # ---- Build the API service resource ----------------------------------
     try:
-        _service = build("gmail", "v1", credentials=creds)
-        return {"success": True, "service": _service}
+        service = build("gmail", "v1", credentials=creds)
+        return {"success": True, "service": service}
     except Exception as exc:
         return {
             "error": "Failed to initialize Gmail service.",
             "detail": str(exc),
         }
+
+
+def get_gmail_service() -> dict:
+    """Build and return a cached Gmail API v1 service.
+
+    Reads ``GMAIL_CLIENT_ID``, ``GMAIL_CLIENT_SECRET``, and
+    ``GMAIL_REFRESH_TOKEN`` from the process environment, constructs OAuth2
+    credentials, and returns a ``Resource`` via
+    ``googleapiclient.discovery.build("gmail", "v1", ...)``.
+
+    The service is cached in a module-level variable so subsequent calls in
+    the same session are nearly free.
+
+    Returns (per §8.2 of the architecture spec):
+        ``{"success": True, "service": <Resource>}`` on success, **or**
+        ``{"error": "<message>", "missing_vars": [...], "detail": "..."}`` on
+        failure.
+    """
+    global _service
+
+    # ---- Return cached service if available -------------------------------
+    if _service is not None:
+        return {"success": True, "service": _service}
+
+    result = build_gmail_service()
+    if "service" in result:
+        _service = result["service"]
+    return result
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ _gmail_base = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_gmail_base)
 
 _get_gmail_service = _gmail_base.get_gmail_service
+_build_gmail_service = _gmail_base.build_gmail_service
 _extract_body = _gmail_base.extract_body
 _safe_reason = getattr(_gmail_base, "_safe_reason", None)
 if _safe_reason is None:
@@ -27,8 +28,15 @@ if _safe_reason is None:
             return str(exc)
 
 
-def _get_one_body(service, message_id: str) -> dict[str, Any]:
-    """Fetch and extract body for a single message."""
+def _get_one_body(message_id: str) -> dict[str, Any]:
+    """Fetch and extract body for a single message using a thread-local service."""
+    # Build a fresh service per thread to avoid sharing the non-thread-safe
+    # googleapiclient Resource across workers.
+    auth_result = _build_gmail_service()
+    if "error" in auth_result:
+        return {"success": False, "message_id": message_id, "error": auth_result.get("error")}
+    service = auth_result["service"]
+
     try:
         msg = service.users().messages().get(userId="me", id=message_id, format="full").execute()
         payload = msg.get("payload", {})
@@ -62,7 +70,8 @@ def get_message_bodies(
     """Fetch the plain-text bodies and key headers for multiple messages in parallel.
 
     This is faster than calling ``get_message_body`` repeatedly when you need to
-    read several messages at once.
+    read several messages at once. Each worker thread builds its own Gmail API
+    service to avoid thread-safety issues with googleapiclient.
 
     Parameters
     ----------
@@ -81,15 +90,15 @@ def get_message_bodies(
     if not message_ids:
         return {"success": True, "messages": []}
 
+    # Validate auth once up front so we fail fast instead of in every worker.
     auth_result = _get_gmail_service()
     if "error" in auth_result:
         return auth_result
-    service = auth_result["service"]
 
     results: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_id = {
-            executor.submit(_get_one_body, service, mid): mid
+            executor.submit(_get_one_body, mid): mid
             for mid in message_ids
         }
         for future in as_completed(future_to_id):

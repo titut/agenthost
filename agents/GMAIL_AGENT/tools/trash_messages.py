@@ -17,9 +17,14 @@ _gmail_base = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_gmail_base)
 
 _get_gmail_service = _gmail_base.get_gmail_service
+_build_gmail_service = _gmail_base.build_gmail_service
 
 
-def _trash_one(service, message_id: str) -> dict[str, Any]:
+def _trash_one(message_id: str) -> dict[str, Any]:
+    auth_result = _build_gmail_service()
+    if "error" in auth_result:
+        return {"success": False, "message_id": message_id, "error": auth_result.get("error")}
+    service = auth_result["service"]
     try:
         service.users().messages().trash(userId="me", id=message_id).execute()
         return {"success": True, "message_id": message_id, "action": "trashed"}
@@ -30,7 +35,11 @@ def _trash_one(service, message_id: str) -> dict[str, Any]:
         return {"success": False, "message_id": message_id, "error": str(exc)}
 
 
-def _untrash_one(service, message_id: str) -> dict[str, Any]:
+def _untrash_one(message_id: str) -> dict[str, Any]:
+    auth_result = _build_gmail_service()
+    if "error" in auth_result:
+        return {"success": False, "message_id": message_id, "error": auth_result.get("error")}
+    service = auth_result["service"]
     try:
         service.users().messages().untrash(userId="me", id=message_id).execute()
         return {"success": True, "message_id": message_id, "action": "untrashed"}
@@ -41,7 +50,11 @@ def _untrash_one(service, message_id: str) -> dict[str, Any]:
         return {"success": False, "message_id": message_id, "error": str(exc)}
 
 
-def _delete_one(service, message_id: str) -> dict[str, Any]:
+def _delete_one(message_id: str) -> dict[str, Any]:
+    auth_result = _build_gmail_service()
+    if "error" in auth_result:
+        return {"success": False, "message_id": message_id, "error": auth_result.get("error")}
+    service = auth_result["service"]
     try:
         service.users().messages().delete(userId="me", id=message_id).execute()
         return {"success": True, "message_id": message_id, "action": "deleted_permanently"}
@@ -60,15 +73,15 @@ def _run_parallel(
     if not message_ids:
         return {"success": True, "results": []}
 
+    # Validate auth once up front so we fail fast instead of in every worker.
     auth_result = _get_gmail_service()
     if "error" in auth_result:
         return auth_result
-    service = auth_result["service"]
 
     results: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_id = {
-            executor.submit(worker, service, mid): mid
+            executor.submit(worker, mid): mid
             for mid in message_ids
         }
         for future in as_completed(future_to_id):
@@ -82,6 +95,9 @@ def trash_messages(
     max_workers: int = 5,
 ) -> dict[str, Any]:
     """Move multiple messages to trash in parallel.
+
+    Each worker thread builds its own Gmail API service to avoid thread-safety
+    issues with googleapiclient.
 
     Parameters
     ----------
@@ -103,6 +119,9 @@ def untrash_messages(
     max_workers: int = 5,
 ) -> dict[str, Any]:
     """Restore multiple trashed messages in parallel.
+
+    Each worker thread builds its own Gmail API service to avoid thread-safety
+    issues with googleapiclient.
 
     Parameters
     ----------
@@ -127,6 +146,9 @@ def delete_messages_permanently(
     """Permanently delete multiple messages in parallel.
 
     .. warning:: This is irreversible. Requires ``confirmed=True``.
+
+    Each worker thread builds its own Gmail API service to avoid thread-safety
+    issues with googleapiclient.
 
     Parameters
     ----------
