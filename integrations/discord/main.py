@@ -295,6 +295,31 @@ def split_message(text: str, limit: int = MAX_MESSAGE_LENGTH) -> list[str]:
     return chunks
 
 
+def truncate_message(text: str, limit: int = MAX_MESSAGE_LENGTH) -> str:
+    """Truncate a message to fit in a single Discord message block.
+
+    Keeps the text under Discord's character limit and appends a truncation
+    marker when cutting. Use this for outbound tool sends where the user wants
+    one message rather than a split thread.
+    """
+    text = text.strip()
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+
+    marker = "\n\n[... truncated]"
+    # Leave room for the marker so the final message stays under the limit.
+    available = limit - len(marker)
+    if available <= 0:
+        return text[:limit]
+    # Try to cut at a newline to keep formatting clean.
+    cut = text.rfind("\n", 0, available)
+    if cut == -1 or cut < available * 0.8:
+        cut = available
+    return text[:cut].rstrip() + marker
+
+
 async def safe_send(channel: discord.abc.Messageable, text: str) -> bool:
     """Send a message, splitting if long, stripping whitespace, and skipping empties.
 
@@ -707,22 +732,17 @@ def start_outbound_server() -> aiohttp.web.Application:
         try:
             if resolved_file is not None:
                 file_obj = discord.File(str(resolved_file), filename=resolved_file.name)
-                chunks = split_message(text)
-                if chunks:
-                    await channel.send(chunks[0], file=file_obj)
-                    for chunk in chunks[1:]:
-                        await safe_send(channel, chunk)
+                truncated = truncate_message(text, limit=MAX_MESSAGE_LENGTH - 100)
+                if truncated:
+                    await channel.send(truncated, file=file_obj)
                 else:
                     await channel.send(file=file_obj)
                 log("info", f"Outbound /send file to channel {channel_id}: {resolved_file}")
             else:
-                chunks = split_message(text)
-                sent = 0
-                for chunk in chunks:
-                    if await safe_send(channel, chunk):
-                        sent += 1
-                if sent == 0:
+                truncated = truncate_message(text, limit=MAX_MESSAGE_LENGTH - 100)
+                if not truncated:
                     return aiohttp.web.json_response({"error": "empty message"}, status=400)
+                await channel.send(truncated)
                 log("info", f"Outbound /send to channel {channel_id}: {text[:80]}")
             return aiohttp.web.json_response({"ok": True, "thread_id": thread_id})
         except discord.HTTPException as exc:
