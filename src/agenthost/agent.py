@@ -318,6 +318,28 @@ class Agent:
                 # Loop back to model with tool results.
                 continue
 
+            if not assistant_content:
+                # Some models return no final text after a successful tool call
+                # (e.g. they treat the tool result as the end of the turn). Synthesize
+                # a short reply from the most recent tool result so the caller still
+                # gets useful output and downstream tools can parse it.
+                for msg in reversed(messages):
+                    if msg.get("role") == "tool":
+                        assistant_content = (
+                            f"{msg.get('name', 'tool')}: {msg.get('content', '')}"
+                        )
+                        break
+                    if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                        break
+                if assistant_content:
+                    logger.info(
+                        "Synthesized content for agent '%s' thread '%s' from tool result",
+                        self.config.name,
+                        thread_id,
+                    )
+                    for chunk in self._chunk_text(assistant_content, chunk_size=1000):
+                        yield json.dumps({"type": "content", "data": chunk}) + "\n"
+
             if assistant_content:
                 logger.debug(
                     "LLM response for thread '%s' produced content: %s",
