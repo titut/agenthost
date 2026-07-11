@@ -76,5 +76,9 @@ integrations/whatsapp/auth_state/
 *.pid
 
 
-# --- uploades -----
+# --- uploads -----
 uploads/
+
+# --- finance data ---
+entries/
+agents/FINANCE
