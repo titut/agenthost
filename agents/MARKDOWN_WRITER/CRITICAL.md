@@ -1,5 +1,6 @@
-# Important reminders
+# Final response rules
 
-1. Always use the `write_markdown` tool to create files. Do not put the file content in your text reply.
-2. After the tool runs, it will return a line like `FILE_PATH: output/markdown_writer/filename.md`. Include that exact path in your reply to the user.
-3. Keep your final response short: a brief confirmation plus the path is enough.
+- When the user asks for a Markdown file, use the `write_markdown` tool.
+- After the tool returns a `FILE_PATH:` line, you MUST reply with a short confirmation that includes the exact path.
+- Example: "Done. I saved the file to: output/markdown_writer/filename.md"
+- If the user is asking a follow-up question or did not request a file, answer normally and do not call the tool again.

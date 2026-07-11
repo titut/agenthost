@@ -272,7 +272,6 @@ class Agent:
                 )
                 # Persist assistant's tool call request.
                 self.memory.append_message(thread_id, {"role": "assistant", "tool_calls": tool_calls})
-                messages.append({"role": "assistant", "tool_calls": tool_calls})
 
                 for tc in tool_calls:
                     name = tc["function"]["name"]
@@ -303,8 +302,14 @@ class Agent:
                         yield json.dumps({"type": "tool_error", "data": {"name": name, "error": result}}) + "\n"
                     yield json.dumps({"type": "tool_result", "data": {"name": name, "result": result}}) + "\n"
 
-                    if "error" in json.loads(result):
-                        recent_tool_errors.append(f"{name}: {result}")
+                    # Tool results may be plain strings (e.g. "FILE_PATH: ...") or JSON.
+                    # Only treat a parsed dict containing "error" as a tool error.
+                    try:
+                        parsed_result = json.loads(result)
+                        if isinstance(parsed_result, dict) and "error" in parsed_result:
+                            recent_tool_errors.append(f"{name}: {result}")
+                    except json.JSONDecodeError:
+                        pass
 
                     tool_msg = {
                         "role": "tool",
@@ -313,32 +318,13 @@ class Agent:
                         "content": result,
                     }
                     self.memory.append_message(thread_id, tool_msg)
-                    messages.append(tool_msg)
 
-                # Loop back to model with tool results.
+                # Rebuild the message list from memory so the final system prompt
+                # (critical instructions) is placed after the tool results. Without
+                # this, the model only sees the reminder before the original user
+                # message and may treat the tool result as the end of the turn.
+                messages = self._build_messages(thread_id)
                 continue
-
-            if not assistant_content:
-                # Some models return no final text after a successful tool call
-                # (e.g. they treat the tool result as the end of the turn). Synthesize
-                # a short reply from the most recent tool result so the caller still
-                # gets useful output and downstream tools can parse it.
-                for msg in reversed(messages):
-                    if msg.get("role") == "tool":
-                        assistant_content = (
-                            f"{msg.get('name', 'tool')}: {msg.get('content', '')}"
-                        )
-                        break
-                    if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                        break
-                if assistant_content:
-                    logger.info(
-                        "Synthesized content for agent '%s' thread '%s' from tool result",
-                        self.config.name,
-                        thread_id,
-                    )
-                    for chunk in self._chunk_text(assistant_content, chunk_size=1000):
-                        yield json.dumps({"type": "content", "data": chunk}) + "\n"
 
             if assistant_content:
                 logger.debug(
@@ -356,11 +342,13 @@ class Agent:
             break
 
     def _build_messages(self, thread_id: str) -> list[dict[str, Any]]:
-        # System prompt sandwich: initial system prompt at the start, final
-        # system prompt (critical instructions / reminder) right before the
-        # current user message. This sandwiches the conversation history in the
-        # middle, which helps long-context models remember the most important
-        # rules when generating the response.
+        # Build the prompt for the next generation. The initial system prompt
+        # (WHOAMI / role) goes at the start, conversation history follows, the
+        # current user message comes next, and the final system prompt (critical
+        # instructions / reminder) is placed at the very end. Keeping the
+        # critical instructions as the freshest context helps the model remember
+        # to reply after tool results, because the message list is rebuilt from
+        # memory after each tool round.
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt_initial}
         ]
@@ -399,11 +387,14 @@ class Agent:
             msg_copy.pop("created_at", None)
             messages.append(msg_copy)
 
-        if self.system_prompt_final:
-            messages.append({"role": "system", "content": self.system_prompt_final})
-
         if current_user is not None:
             messages.append(current_user)
+
+        # Place the critical-instruction reminder at the very end of the payload.
+        # This ensures it is the freshest context for the next assistant generation,
+        # even when we rebuild the list after tool results mid-turn.
+        if self.system_prompt_final:
+            messages.append({"role": "system", "content": self.system_prompt_final})
 
         return messages
 
