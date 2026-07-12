@@ -31,6 +31,7 @@ _spec.loader.exec_module(_gmail_base)
 
 _get_gmail_service = _gmail_base.get_gmail_service
 _extract_body = _gmail_base.extract_body
+_get_message_body_dict = _gmail_base.get_message_body_dict
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -125,28 +126,10 @@ def get_message_body(message_id: str) -> dict[str, Any]:
         "body_plain_text": "..."}`` on success, **or**
         ``{"error": "...", "detail": "..."}`` on failure.
     """
-    # --- Fetch full message -----------------------------------------------
-    result = get_message(message_id, format="full")
-    if "error" in result:
-        return result
-    msg = result["message"]
-
-    # --- Extract headers --------------------------------------------------
-    headers = _extract_headers(msg.get("payload", {}))
-    headers["id"] = msg.get("id", "")
-    headers["threadId"] = msg.get("threadId", "")
-    headers["snippet"] = msg.get("snippet", "")
-    headers["labelIds"] = msg.get("labelIds", [])
-    headers["internalDate"] = msg.get("internalDate", "")
-
-    # --- Extract body -----------------------------------------------------
-    body_result = _extract_body(msg.get("payload", {}))
-    headers["body_plain_text"] = body_result.get(
-        "body_plain_text", "(no plain text body available)"
-    )
-    headers["success"] = True
-
-    return headers
+    auth_result = _get_gmail_service()
+    if "error" in auth_result:
+        return auth_result
+    return _get_message_body_dict(auth_result["service"], message_id)
 
 
 # ---------------------------------------------------------------------------
@@ -232,19 +215,6 @@ _HEADER_NAMES = {
     "References": "references",
     "In-Reply-To": "in_reply_to",
 }
-
-
-def _extract_headers(payload: dict) -> dict[str, Any]:
-    """Extract known headers from the payload's ``headers`` list."""
-    result: dict[str, Any] = {}
-    headers_raw = payload.get("headers") or []
-    for h in headers_raw:
-        name = h.get("name", "")
-        value = h.get("value", "")
-        key = _HEADER_NAMES.get(name)
-        if key:
-            result[key] = value
-    return result
 
 
 def _safe_reason(exc: HttpError) -> str:

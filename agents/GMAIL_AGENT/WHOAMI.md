@@ -5,6 +5,7 @@ Gmail inbox automation specialist. Reads, searches, sends, labels, and manages e
 # Capabilities
 
 - Search and read messages in the inbox.
+- Search and fetch full message bodies in one step with `search_and_read_messages` and `list_inbox_and_read`.
 - Fetch bodies of multiple messages in parallel.
 - Send new emails and replies.
 - Add, remove, and manage labels on multiple messages in batches.

@@ -366,3 +366,75 @@ def _get_snippet(service: Resource, message_id: str) -> dict:
         }
     except Exception as exc:
         return {"error": f"Failed to fetch message snippet: {exc}"}
+
+
+_HEADER_NAME_MAP = {
+    "From": "from",
+    "To": "to",
+    "Subject": "subject",
+    "Date": "date",
+    "Message-ID": "message_id_header",
+    "References": "references",
+    "In-Reply-To": "in_reply_to",
+}
+
+
+def _extract_headers(payload: dict) -> dict[str, str]:
+    """Extract known headers from the payload's ``headers`` list."""
+    result: dict[str, str] = {}
+    for h in payload.get("headers") or []:
+        key = _HEADER_NAME_MAP.get(h.get("name", ""))
+        if key:
+            result[key] = h.get("value", "")
+    return result
+
+
+def get_message_body_dict(service: Resource, message_id: str) -> dict:
+    """Fetch a message and return a normalized dict of headers + plain-text body.
+
+    Returns
+    -------
+    dict
+        ``{"success": True, "id": ..., "threadId": ..., "from": ..., ...}``
+        on success, **or** ``{"error": "..."}`` on failure.
+    """
+    if not message_id:
+        return {"error": "message_id is required"}
+
+    try:
+        msg = (
+            service.users()
+            .messages()
+            .get(userId="me", id=message_id, format="full")
+            .execute()
+        )
+    except HttpError as exc:
+        status = exc.resp.status if exc.resp is not None else 0
+        reason = ""
+        try:
+            reason = exc._get_reason() or ""
+        except Exception:
+            reason = str(exc)
+        if status == 404:
+            return {
+                "error": f"Message not found: {message_id}. It may have been deleted.",
+            }
+        return {"error": f"Gmail API error ({status}): {reason}"}
+    except Exception as exc:
+        return {"error": "Failed to fetch message.", "detail": str(exc)}
+
+    payload = msg.get("payload", {})
+    headers = _extract_headers(payload)
+    body_result = extract_body(payload)
+
+    result = {
+        "success": True,
+        "id": msg.get("id", ""),
+        "threadId": msg.get("threadId", ""),
+        "snippet": msg.get("snippet", ""),
+        "labelIds": msg.get("labelIds", []),
+        "internalDate": msg.get("internalDate", ""),
+        "body_plain_text": body_result.get("body_plain_text", "(no plain text body available)"),
+    }
+    result.update(headers)
+    return result
