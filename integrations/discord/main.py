@@ -295,6 +295,27 @@ def split_message(text: str, limit: int = MAX_MESSAGE_LENGTH) -> list[str]:
     return chunks
 
 
+def _format_tool_args(args: dict[str, Any], max_value_len: int = 1000) -> str:
+    """Format tool arguments for display, truncating long values.
+
+    Keeps tool-start notifications readable in Discord by capping each
+    argument value and the total args string.
+    """
+    if not args:
+        return ""
+    parts: list[str] = []
+    for key, value in args.items():
+        s = repr(value)
+        if len(s) > max_value_len:
+            s = s[:max_value_len].rstrip() + "..."
+        parts.append(f"{key}={s}")
+    args_str = ", ".join(parts)
+    # Cap the full args string as well so the backticks don't explode.
+    if len(args_str) > 1500:
+        args_str = args_str[:1500].rstrip() + "..."
+    return args_str
+
+
 def truncate_message(text: str, limit: int = MAX_MESSAGE_LENGTH) -> str:
     """Truncate a message to fit in a single Discord message block.
 
@@ -618,8 +639,10 @@ async def process_agent_request(
                     await flush_buffer(force=True)
                     name = event.get("name", "tool")
                     args = event.get("arguments", {})
-                    args_str = ", ".join(f"{k}={v!r}" for k, v in args.items()) if args else ""
-                    if await safe_send(channel, f"🔧 **Using tool:** `{name}({args_str})`"):
+                    args_str = _format_tool_args(args)
+                    tool_msg = f"🔧 **Using tool:** `{name}({args_str})`"
+                    truncated = truncate_message(tool_msg, limit=MAX_MESSAGE_LENGTH - 100)
+                    if truncated and await safe_send(channel, truncated):
                         sent_something = True
 
                 elif event_type == "tool_result":

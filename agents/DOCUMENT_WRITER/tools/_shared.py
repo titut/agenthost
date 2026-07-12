@@ -9,11 +9,11 @@ from typing import Any
 from agenthost.home import ensure_agenthost_home
 from agenthost.logger import setup_logging
 
-logger = setup_logging("agenthost.markdown_writer")
+logger = setup_logging("agenthost.document_writer")
 
 # Default output directory for files (relative to agenthost home).
-OUTPUT_DIR = ensure_agenthost_home() / "output" / "markdown_writer"
-RELATIVE_OUTPUT_DIR = Path("output") / "markdown_writer"
+OUTPUT_DIR = ensure_agenthost_home() / "output" / "document_writer"
+RELATIVE_OUTPUT_DIR = Path("output") / "document_writer"
 
 
 def unique_path(target: Path) -> Path:
