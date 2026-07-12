@@ -79,6 +79,6 @@ integrations/whatsapp/auth_state/
 # --- uploads -----
 uploads/
 
-# --- finance data ---
+# --- ignored agents ---
 entries/
-agents/FINANCE
+agents_personal
