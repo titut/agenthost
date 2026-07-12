@@ -362,10 +362,10 @@ def list_monitored_agents() -> dict[str, Any]:
     resolved = {r["alias"] for r in result}
     for alias in monitored:
         if alias not in resolved:
-            path = AgentsConfig().resolve(alias)
+            db_path = _reader_module._resolve_memory_db(alias)
             result.append({
                 "alias": alias,
-                "memory_db": str(path / "memory" / "memory.db") if path else None,
+                "memory_db": str(db_path) if db_path else None,
                 "exists": False,
             })
 

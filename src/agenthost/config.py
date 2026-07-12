@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from agenthost.agents_config import AgentsConfig
+from agenthost.home import get_agenthost_home
 from agenthost.skills import load_skills
 
 
@@ -89,7 +90,7 @@ class AgentConfig:
 
     @property
     def memory_dir(self) -> Path:
-        return self.path / "memory"
+        return get_agenthost_home() / "memory" / self.name
 
     @property
     def skills(self) -> dict[str, str]:

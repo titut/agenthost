@@ -11,7 +11,9 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-AGENT_DIR = Path(__file__).resolve().parent.parent
+from agenthost.home import get_agenthost_home
+
+AGENT_DIR = get_agenthost_home() / "agents" / "TODO"
 DB_PATH = AGENT_DIR / "todos.db"
 
 _connection: Optional[sqlite3.Connection] = None

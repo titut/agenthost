@@ -12,17 +12,18 @@ import os
 from pathlib import Path
 from typing import Any
 
+from agenthost.home import get_agenthost_home
 from agenthost.logger import setup_logging
 
 
 logger = setup_logging("agenthost.filesystem")
 
 # Directory where Discord/uploads store user-provided files.
-UPLOADS_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
+UPLOADS_DIR = get_agenthost_home() / "uploads"
 
 # Root directory that agents are allowed to read from. All requested paths
 # must resolve inside this directory.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = get_agenthost_home()
 
 
 def _resolve_and_guard(path: str) -> Path:
@@ -225,7 +226,7 @@ def save_upload_with_text(
     returned text_path points to the original file. Binary formats get a
     `.txt` sidecar.
 
-    Returns (original_path, text_path) relative to the project root.
+    Returns (original_path, text_path) relative to the agenthost home directory.
     """
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 

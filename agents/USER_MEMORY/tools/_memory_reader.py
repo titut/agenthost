@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Iterator, NamedTuple
 
 from agenthost.agents_config import AgentsConfig
+from agenthost.config import AgentConfig
 
 
 class MemoryMessage(NamedTuple):
@@ -28,16 +29,29 @@ def _resolve_agent_path(alias: str) -> Path | None:
     return path.expanduser().resolve()
 
 
+def _resolve_memory_db(alias: str) -> Path | None:
+    """Resolve an agent alias to its memory database path.
+
+    Memory lives under the agenthost home directory (e.g. ~/.agenthost/memory/<name>),
+    not inside the agent code folder.
+    """
+    agent_path = _resolve_agent_path(alias)
+    if agent_path is None:
+        return None
+    try:
+        config = AgentConfig.from_path(agent_path)
+        return config.memory_dir / "memory.db"
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def iter_monitored_agents(monitored_agents: list[str]) -> Iterator[tuple[str, Path]]:
     """Yield (alias, memory_db_path) for each monitored agent that exists."""
     for alias in monitored_agents:
         if not alias or alias.upper() == "USER_MEMORY":
             continue
-        agent_path = _resolve_agent_path(alias)
-        if agent_path is None:
-            continue
-        db_path = agent_path / "memory" / "memory.db"
-        if db_path.exists():
+        db_path = _resolve_memory_db(alias)
+        if db_path is not None and db_path.exists():
             yield alias, db_path
 
 
