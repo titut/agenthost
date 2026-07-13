@@ -81,8 +81,14 @@ class AgentMemory:
     def repair_thread(self, thread_id: str) -> int:
         """Repair a conversation thread so it can be sent to the LLM.
 
+        Instead of deleting assistant tool_calls that lack matching tool
+        responses (e.g. after a /stop), this keeps the assistant message and
+        lets ``_normalize_messages`` append synthetic tool results. That
+        preserves the assistant's intent and any partial results.
+
         Removes:
-        - Assistant messages with tool_calls that have no matching tool responses.
+        - Following tool rows for corrupted assistant tool_calls that have no
+          valid tool_call IDs.
         - Tool messages without a preceding assistant message that declared the
           matching tool_call.
 
@@ -96,8 +102,12 @@ class AgentMemory:
             ).fetchall()
 
         ids_to_delete: set[int] = set()
+        ids_to_strip_tool_calls: set[int] = set()
 
-        # Pass 1: remove assistant tool_calls without matching tool responses.
+        # Pass 1: identify corrupted assistant tool_calls (no valid IDs) so we
+        # can strip the tool_calls and delete their following tool rows. Keep
+        # the assistant content. Valid dangling tool_calls are preserved;
+        # _normalize_messages will synthesize missing responses.
         i = 0
         while i < len(rows):
             row = rows[i]
@@ -115,21 +125,12 @@ class AgentMemory:
 
             if not expected_ids:
                 # Tool calls without IDs cannot be reliably matched to tool
-                # responses and are invalid for most providers. Remove the
-                # dangling assistant message and any following tool messages.
-                ids_to_delete.add(row["id"])
+                # responses. Strip the tool_calls from the assistant message and
+                # delete any following tool messages.
+                ids_to_strip_tool_calls.add(row["id"])
                 for tool_row in following_tool_rows:
                     ids_to_delete.add(tool_row["id"])
-                i = j
-                continue
 
-            found_ids = {tool_row["tool_call_id"] for tool_row in following_tool_rows}
-            if not expected_ids <= found_ids:
-                ids_to_delete.add(row["id"])
-                # Also discard any tool responses that immediately followed this
-                # dangling assistant message, since they no longer have a caller.
-                for tool_row in following_tool_rows:
-                    ids_to_delete.add(tool_row["id"])
             i = j
 
         # Pass 2: remove orphaned tool messages whose tool_call_id is not declared
@@ -139,6 +140,10 @@ class AgentMemory:
             if row["id"] in ids_to_delete:
                 continue
             if row["role"] == "assistant" and row["tool_calls"]:
+                # Skip rows whose tool_calls will be stripped; they no longer
+                # declare tool_call_ids.
+                if row["id"] in ids_to_strip_tool_calls:
+                    continue
                 tool_calls = json.loads(row["tool_calls"])
                 for tc in tool_calls:
                     if tc.get("id"):
@@ -147,15 +152,26 @@ class AgentMemory:
                 if row["tool_call_id"] not in declared_tool_call_ids:
                     ids_to_delete.add(row["id"])
 
-        if ids_to_delete:
-            with self._connect() as conn:
+        modified_count = 0
+        with self._connect() as conn:
+            if ids_to_strip_tool_calls:
+                for msg_id in ids_to_strip_tool_calls:
+                    conn.execute(
+                        "UPDATE messages SET tool_calls = NULL WHERE id = ?",
+                        (msg_id,),
+                    )
+                modified_count += len(ids_to_strip_tool_calls)
+
+            if ids_to_delete:
                 placeholders = ",".join("?" * len(ids_to_delete))
                 conn.execute(
                     f"DELETE FROM messages WHERE id IN ({placeholders})",
                     tuple(ids_to_delete),
                 )
-                conn.commit()
-        return len(ids_to_delete)
+                modified_count += len(ids_to_delete)
+
+            conn.commit()
+        return modified_count
 
     def append_message(self, thread_id: str, message: dict[str, Any]) -> None:
         tool_calls = json.dumps(message.get("tool_calls")) if message.get("tool_calls") else None

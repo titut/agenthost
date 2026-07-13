@@ -597,14 +597,15 @@ class Agent:
                         j += 1
 
                     found_ids = {t.get("tool_call_id") for t in following_tools}
-                    if expected_ids and not expected_ids <= found_ids:
-                        # Dangling tool_call without all responses: discard it
-                        # and the partial tool responses that followed.
+                    had_missing_responses = expected_ids and not expected_ids <= found_ids
+                    if had_missing_responses:
+                        # Dangling tool_call after a stop/interrupt. Preserve the
+                        # assistant message and any real tool responses, then add
+                        # synthetic results for missing tool_call_ids so the
+                        # conversation remains API-valid and resumable.
                         modified = True
-                        i = j
-                        continue
 
-                    # Valid group: assistant tool_call + tool responses.
+                    # Valid or repaired group: assistant tool_call + tool responses.
                     result.append(msg)
                     for tc in msg["tool_calls"]:
                         matching = None
@@ -618,6 +619,14 @@ class Agent:
                                 tool_copy["name"] = tc["function"].get("name", "")
                                 modified = True
                             result.append(tool_copy)
+                        else:
+                            synthetic_tool = {
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "name": tc["function"].get("name", ""),
+                                "content": "[Tool call interrupted before a result was received. The user may want to continue from here.]",
+                            }
+                            result.append(synthetic_tool)
                     i = j
                     continue
                 else:
