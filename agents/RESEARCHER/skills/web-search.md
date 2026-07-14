@@ -11,15 +11,15 @@ from memory.
 
 Follow this exact loop:
 
-1. **Search + fetch**
-   - Call `web_search(query, max_results=5)` with a focused query.
-   - The tool returns up to 5 results with `title`, `url`, `snippet`, and the
-     fetched page `content`.
+1. **Search + retrieve chunks**
+   - Call `web_search(query, max_results=5)`.
+   - The tool returns the most relevant text chunks, each with `text`, `title`, and `url`.
 
 2. **Evaluate**
-   - Read the snippets and fetched content carefully.
-   - If 2–3 reputable sources directly agree and answer the question, stop and
-     synthesize the answer.
+   - Read the returned chunks carefully.
+   - If 2–3 reputable sources directly agree and answer the question, **trust it
+     and stop**. Do not second-guess or search again just to be sure.
+   - If the first search gives a complete, well-supported answer, stop immediately.
 
 3. **Refine and repeat (only if still missing information)**
    - Construct a new, more specific query targeting the gap.

@@ -1,11 +1,28 @@
 """Search tools for the RESEARCHER agent."""
+
 from __future__ import annotations
 
 import asyncio
+import math
+import os
+from pathlib import Path
 from typing import Any
 
 DEFAULT_MAX_CHARS = 10_000
 FETCH_BATCH_SIZE = 5
+CHUNK_SIZE = 800
+CHUNK_OVERLAP = 150
+TOP_K_CHUNKS = 12
+
+# DeepInfra OpenAI-compatible embedding endpoint. The API key is expected to be
+# provided by agenthost via the environment (OPENAI_API_KEY or DEEPINFRA_API_KEY).
+EMBEDDING_BASE_URL = "https://api.deepinfra.com/v1/openai"
+EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
+
+
+def _api_key() -> str | None:
+    """Return the API key exposed by agenthost."""
+    return os.environ.get("OPENAI_API_KEY") or os.environ.get("DEEPINFRA_API_KEY")
 
 
 def _search_ddg(query: str, max_results: int) -> dict[str, Any]:
@@ -88,10 +105,96 @@ async def _fetch_batch(
     processed: list[dict[str, Any]] = []
     for url, result in zip(urls, results):
         if isinstance(result, Exception):
-            processed.append({"url": url, "error": f"{type(result).__name__}: {result}"})
+            processed.append(
+                {"url": url, "error": f"{type(result).__name__}: {result}"}
+            )
         else:
             processed.append(result)
     return processed
+
+
+def _chunk_text(text: str, source: dict[str, Any]) -> list[dict[str, Any]]:
+    """Split text into overlapping chunks and tag each with its source."""
+    chunks: list[dict[str, Any]] = []
+    if not text:
+        return chunks
+    start = 0
+    while start < len(text):
+        end = start + CHUNK_SIZE
+        chunk = text[start:end]
+        chunks.append(
+            {
+                "text": chunk.strip(),
+                "url": source.get("url", ""),
+                "title": source.get("title", ""),
+            }
+        )
+        if end >= len(text):
+            break
+        start += CHUNK_SIZE - CHUNK_OVERLAP
+    return chunks
+
+
+async def _embed_texts(texts: list[str]) -> dict[str, Any]:
+    """Embed a list of texts using the configured DeepInfra embedding model."""
+    if not texts:
+        return {"embeddings": []}
+
+    key = _api_key()
+    if not key:
+        return {"error": "No API key found. Set OPENAI_API_KEY or DEEPINFRA_API_KEY."}
+
+    try:
+        from openai import AsyncOpenAI
+    except ImportError as exc:
+        return {"error": f"openai SDK is not installed: {exc}"}
+
+    client = AsyncOpenAI(base_url=EMBEDDING_BASE_URL, api_key=key)
+    try:
+        response = await client.embeddings.create(
+            model=EMBEDDING_MODEL,
+            input=texts,
+        )
+        embeddings = [item.embedding for item in response.data]
+        return {"embeddings": embeddings}
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"Embedding failed: {type(exc).__name__}: {exc}"}
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Return cosine similarity between two vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+async def _retrieve_top_chunks(
+    query: str,
+    chunks: list[dict[str, Any]],
+    top_k: int = TOP_K_CHUNKS,
+) -> list[dict[str, Any]]:
+    """Embed query and chunks, then return the top-k most similar chunks."""
+    if not chunks:
+        return []
+
+    texts = [query] + [c["text"] for c in chunks]
+    embed_result = await _embed_texts(texts)
+    if "error" in embed_result:
+        raise RuntimeError(embed_result["error"])
+
+    embeddings = embed_result["embeddings"]
+    query_embedding = embeddings[0]
+    chunk_embeddings = embeddings[1:]
+
+    scored = [
+        (_cosine_similarity(query_embedding, emb), chunk)
+        for chunk, emb in zip(chunks, chunk_embeddings)
+    ]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [chunk for _score, chunk in scored[:top_k]]
 
 
 async def web_search(
@@ -99,12 +202,11 @@ async def web_search(
     max_results: int = 5,
     max_chars: int = DEFAULT_MAX_CHARS,
 ) -> dict[str, Any]:
-    """Search the web and fetch the resulting pages.
+    """Search the web and return the most relevant page chunks.
 
-    Runs a DuckDuckGo search for *query*, then fetches the top *max_results*
-    pages in parallel using Crawl4AI. Each returned item includes the page
-    title, URL, search snippet, and full extracted content (truncated to
-    *max_chars*).
+    Runs a DuckDuckGo search for *query*, fetches the top *max_results* pages,
+    splits them into overlapping chunks, embeds the query and chunks via
+    DeepInfra, and returns only the top-K most relevant chunks.
 
     Args:
         query: The search query.
@@ -112,20 +214,24 @@ async def web_search(
         max_chars: Maximum characters of extracted text per page (default 10 000).
 
     Returns:
-        A dict with the original query and a "results" list. Each result has
-        keys: title, url, snippet, content, and optionally error.
+        A dict with the original query and a "chunks" list. Each chunk has
+        keys: text, title, url.
     """
     search_result = _search_ddg(query, max_results)
     if "error" in search_result:
         return search_result
 
     results = search_result.get("results") or []
-    urls = [r["url"] for r in results if r.get("url", "").startswith(("http://", "https://"))]
+    urls = [
+        r["url"]
+        for r in results
+        if r.get("url", "").startswith(("http://", "https://"))
+    ]
 
     if not urls:
         return {
             "query": query,
-            "results": results,
+            "chunks": [],
             "note": "Search returned no fetchable URLs.",
         }
 
@@ -134,42 +240,56 @@ async def web_search(
     except ImportError as exc:
         return {
             "query": query,
-            "results": results,
+            "chunks": [],
             "error": f"Crawl4AI is not installed: {exc}",
         }
 
     browser_config = BrowserConfig(verbose=False)
 
-    fetched_by_url: dict[str, dict[str, Any]] = {}
+    fetched: list[dict[str, Any]] = []
     try:
         async with AsyncWebCrawler(config=browser_config) as crawler:
             for i in range(0, len(urls), FETCH_BATCH_SIZE):
                 batch = urls[i : i + FETCH_BATCH_SIZE]
-                batch_results = await _fetch_batch(crawler, batch, max_chars)
-                for item in batch_results:
-                    fetched_by_url[item["url"]] = item
+                fetched.extend(await _fetch_batch(crawler, batch, max_chars))
     except Exception as exc:  # noqa: BLE001
         return {
             "query": query,
-            "results": results,
+            "chunks": [],
             "error": f"Failed to fetch result pages: {type(exc).__name__}: {exc}",
         }
 
-    merged = []
-    for r in results:
-        url = r.get("url", "")
-        fetched = fetched_by_url.get(url, {})
-        merged.append(
-            {
-                "title": r.get("title", ""),
-                "url": url,
-                "snippet": r.get("snippet", ""),
-                "content": fetched.get("content", ""),
-                "error": fetched.get("error"),
-            }
-        )
+    successful = [
+        item for item in fetched if "error" not in item and item.get("content")
+    ]
+    if not successful:
+        return {
+            "query": query,
+            "chunks": [],
+            "error": "Could not extract content from any result page.",
+        }
 
-    return {"query": query, "results": merged}
+    all_chunks: list[dict[str, Any]] = []
+    for item in successful:
+        all_chunks.extend(_chunk_text(item.get("content", ""), item))
+
+    if not all_chunks:
+        return {
+            "query": query,
+            "chunks": [],
+            "error": "No usable text chunks extracted from pages.",
+        }
+
+    try:
+        top_chunks = await _retrieve_top_chunks(query, all_chunks, TOP_K_CHUNKS)
+    except RuntimeError as exc:
+        return {
+            "query": query,
+            "chunks": [],
+            "error": str(exc),
+        }
+
+    return {"query": query, "chunks": top_chunks}
 
 
 def calculate(expression: str) -> dict:
