@@ -248,14 +248,11 @@ The ORCHESTRATOR takes any request, decomposes it into ordered steps, assigns th
 **Personality:** Domain-agnostic, methodical, user-in-the-loop.
 
 **Tools:**
-- `list_agents()` — Discover running agents via `agenthost list`
+- `list_agents()` — List every registered agent, its running status, and its capabilities
 - `send_message(agent_name, message)` — Give a task to a running agent
-- `read_agent_folder(name)` — Inspect an agent's persona, tools, and skills
-- `plan_save(key, json)` — Store a plan in the KV store
-- `plan_load(key)` — Retrieve a stored plan
-- `plan_delete(key)` — Remove a plan from storage
+- `plan(steps=None, complete_step=None)` — Maintain one simple plan per thread
 
-**Skills:** `planning.md` — coarse-to-fine decomposition, agent matching, execution tracking; `agent-lifecycle.md` — discover/message/reuse patterns.
+**Skills:** `planning.md` — simple step-by-step planning and delegation; `agent-lifecycle.md` — discover/message/reuse patterns.
 
 **Config:** Model `Qwen/Qwen3-235B-A22B-Instruct-2507`, temperature `0.4`.
 
@@ -264,7 +261,7 @@ The ORCHESTRATOR takes any request, decomposes it into ordered steps, assigns th
 A curious research assistant that finds information, summarizes topics, and thinks step by step.
 
 **Tools:**
-- `search_web(query)` — DuckDuckGo web search (no API key required)
+- `web_search(query, max_results=5)` — DuckDuckGo search + fetch page content (no API key required)
 - `calculate(expression)` — Evaluate mathematical expressions
 
 **Skills:** `web-search.md` — guidance on when and how to use search tools.
@@ -388,7 +385,7 @@ def weather(city: str) -> str:
 - Both sync and async functions are supported (sync functions run in a thread pool)
 - Return strings or JSON-serializable objects
 
-The RESEARCHER agent ships with a free web search tool (`search_web`) powered by DuckDuckGo via the `ddgs` package — no API key required.
+The RESEARCHER agent ships with a free web search tool (`web_search`) powered by DuckDuckGo via the `ddgs` package, which also fetches the result pages with Crawl4AI — no API key required.
 
 ---
 
@@ -470,7 +467,7 @@ Messages are automatically trimmed by estimated tokens. The agent loads only the
 | `value`      | TEXT    | JSON-serialized value        |
 | `updated_at` | DATETIME| Auto-set timestamp           |
 
-The ORCHESTRATOR agent uses the KV store for plan persistence (`plan_save`/`plan_load`/`plan_delete`).
+The ORCHESTRATOR agent uses the KV store for plan persistence via the `plan(steps=[...])` and `plan(complete_step=<index>)` tool.
 
 A chat request without a `thread_id` starts a new thread automatically, so previous conversation history is preserved while new conversations do not inherit old context.
 
@@ -587,7 +584,7 @@ Response:
   "status": "ok",
   "agent": "RESEARCHER",
   "model": "gpt-4o-mini",
-  "tools": ["search_web", "calculate"]
+  "tools": ["web_search", "calculate"]
 }
 ```
 

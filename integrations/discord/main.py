@@ -4,8 +4,9 @@ Forwards incoming Discord messages (DMs or guild mentions) to a running
 agenthost agent's /chat endpoint and sends the agent's replies back via the
 Discord bot user.
 
-Also exposes an outbound /send endpoint so the agent can push messages to
-Discord channels or users via the send_discord_message built-in tool.
+Also exposes an outbound /send endpoint so the agent can push messages and
+optional file attachments to Discord channels or users via the send_discord
+built-in tool.
 """
 from __future__ import annotations
 
@@ -47,7 +48,7 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "info").lower()
 MAX_MESSAGE_LENGTH = 2000
 
 # Outbound HTTP server settings. The agent calls this via the
-# send_discord_message built-in tool.
+# send_discord built-in tool.
 BRIDGE_HTTP_HOST = os.environ.get("BRIDGE_HTTP_HOST", "127.0.0.1").strip()
 BRIDGE_HTTP_PORT = int(os.environ.get("BRIDGE_HTTP_PORT", "9002"), 10)
 

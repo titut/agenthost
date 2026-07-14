@@ -111,7 +111,7 @@ ALLOWED_CHANNEL_IDS=123456789012345678
 
 ## Outbound Discord messages (scheduled events)
 
-The bridge exposes a small HTTP server at `http://127.0.0.1:9002/send`. The agent can call the built-in `send_discord_message(message, thread_id)` tool (enabled via `agent.yaml` `builtin_tools: [discord]`) to POST messages to that endpoint.
+The bridge exposes a small HTTP server at `http://127.0.0.1:9002/send`. The agent can call the built-in `send_discord(text, thread_id, file_path='')` tool (enabled via `agent.yaml` `builtin_tools: [discord]`) to POST messages and optional file attachments to that endpoint.
 
 The `thread_id` is a Discord channel ID (or DM channel ID). For example:
 
@@ -123,7 +123,7 @@ POST /send
 }
 ```
 
-This is useful for scheduled events: the event prompt tells the agent to run a task and then call `send_discord_message` with the result.
+This is useful for scheduled events: the event prompt tells the agent to run a task and then call `send_discord` with the result.
 
 In the agent's `agent.yaml`:
 

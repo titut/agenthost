@@ -317,7 +317,7 @@ class ThreadTools:
         """Return the current conversation thread_id.
 
         Use this when you need to know the current thread_id, for example to
-        call send_discord_message with the correct channel ID.
+        call send_discord with the correct channel ID.
         """
         agent = self._agent_provider() if self._agent_provider else None
         thread_id = getattr(agent, "_current_thread_id", None) if agent else None
@@ -335,8 +335,8 @@ class DiscordTools:
         self.config = config
         self._agent_provider = agent_provider
 
-    def send_discord_message(self, message: str, thread_id: str) -> str:
-        """Send a Discord message to the channel identified by thread_id.
+    def send_discord(self, text: str, thread_id: str, file_path: str = "") -> str:
+        """Send a Discord message, with an optional file attachment.
 
         The agent can call this from scheduled events or any other workflow to
         push a message to Discord without waiting for an incoming message.
@@ -344,71 +344,46 @@ class DiscordTools:
         remembers it.
 
         Args:
-            message: The text to send.
+            text: The text message to send (required).
             thread_id: The Discord channel ID (or DM channel ID) to send to.
+            file_path: Optional path to a file attachment, relative to the
+                agenthost home directory or absolute.
         """
         bridge_url = self._bridge_url()
+        payload: dict[str, object] = {"text": text, "thread_id": thread_id}
+
+        if file_path:
+            resolved = self._resolve_agenthost_path(file_path)
+            if isinstance(resolved, str):
+                return json.dumps({"error": resolved})
+            if not resolved.exists():
+                return json.dumps({"error": f"File not found: {file_path}"})
+            if not resolved.is_file():
+                return json.dumps({"error": f"Path is not a file: {file_path}"})
+            payload["file_path"] = str(resolved)
+
         try:
             response = httpx.post(
                 bridge_url,
-                json={"text": message, "thread_id": thread_id},
-                timeout=30.0,
+                json=payload,
+                timeout=60.0 if file_path else 30.0,
             )
             response.raise_for_status()
 
-            # Record the outbound message in memory so the agent remembers sending it.
-            self._record_in_memory(thread_id, message)
+            self._record_in_memory(
+                thread_id, text or (f"Sent file: {file_path}" if file_path else "")
+            )
 
-            return json.dumps({"status": "sent", "thread_id": thread_id, "bridge": bridge_url})
+            result: dict[str, object] = {
+                "status": "sent",
+                "thread_id": thread_id,
+                "bridge": bridge_url,
+            }
+            if file_path:
+                result["file_path"] = str(resolved)
+            return json.dumps(result)
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"error": f"Failed to send Discord message: {exc}"})
-
-    def send_discord_file(self, file_path: str, thread_id: str, text: str = "") -> str:
-        """Send a file to Discord as an attachment.
-
-        The file path is resolved relative to the agenthost home directory
-        (the project root). Use this when you have created or received a file
-        and need to deliver it to the user in Discord.
-
-        Args:
-            file_path: Path to the file, relative to the agenthost home directory or absolute.
-            thread_id: The Discord channel ID (or DM channel ID) to send to.
-            text: Optional message to include with the file.
-        """
-        resolved = self._resolve_agenthost_path(file_path)
-        if isinstance(resolved, str):
-            return json.dumps({"error": resolved})
-
-        if not resolved.exists():
-            return json.dumps({"error": f"File not found: {file_path}"})
-        if not resolved.is_file():
-            return json.dumps({"error": f"Path is not a file: {file_path}"})
-
-        bridge_url = self._bridge_url()
-        try:
-            response = httpx.post(
-                bridge_url,
-                json={
-                    "text": text,
-                    "thread_id": thread_id,
-                    "file_path": str(resolved),
-                },
-                timeout=60.0,
-            )
-            response.raise_for_status()
-
-            self._record_in_memory(thread_id, text or f"Sent file: {file_path}")
-
-            return json.dumps(
-                {
-                    "status": "sent",
-                    "thread_id": thread_id,
-                    "file_path": str(resolved),
-                    "bridge": bridge_url,
-                }
-            )
-        except Exception as exc:  # noqa: BLE001
-            return json.dumps({"error": f"Failed to send Discord file: {exc}"})
 
     def _bridge_url(self) -> str:
         return (
@@ -471,24 +446,19 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
             "Actions: list, add, update, delete. "
             "Use this when the user asks to schedule, list, modify, or remove recurring tasks."
         )
-    if "discord" in enabled or "send_discord_message" in enabled:
+    if "discord" in enabled or "send_discord" in enabled:
         descriptions.append(
-            "- `send_discord_message(message, thread_id)`: Push a message to Discord via the bridge. "
-            "Use this when the user asks you to send something to Discord, "
+            "- `send_discord(text, thread_id, file_path='')`: Push a message to Discord via the bridge, "
+            "with an optional file attachment. Use this when the user asks you to send something to Discord, "
             "or when a scheduled event prompt instructs you to deliver results to Discord. "
             "The thread_id must be the current conversation thread_id, which is shown at the top of the system prompt. "
-            "If you are unsure of the current thread_id, call `get_current_thread_id()` first."
-        )
-    if "discord" in enabled or "send_discord_file" in enabled:
-        descriptions.append(
-            "- `send_discord_file(file_path, thread_id, text='')`: Send a file attachment to Discord. "
-            "Use this when you have created or received a file and need to deliver it to the user. "
-            "file_path should be a relative path from the agenthost home directory (e.g. 'output/markdown_writer/file.md')."
+            "If you are unsure of the current thread_id, call `get_current_thread_id()` first. "
+            "file_path, when provided, should be a relative path from the agenthost home directory (e.g. 'output/markdown_writer/file.md')."
         )
     if "thread" in enabled or "get_current_thread_id" in enabled:
         descriptions.append(
             "- `get_current_thread_id()`: Return the current conversation thread_id. "
-            "Use this when a tool like send_discord_message needs a thread_id and you are not certain of it."
+            "Use this when a tool like send_discord needs a thread_id and you are not certain of it."
         )
     if "filesystem" in enabled or "read_file" in enabled:
         descriptions.append(
@@ -519,7 +489,7 @@ def make_builtin_tools(
           builtin_tools: [events, discord]
 
         extra:
-          builtin_tools: [add_event, send_discord_message, get_current_thread_id]
+          builtin_tools: [add_event, send_discord, get_current_thread_id]
     """
     enabled = config.extra.get("builtin_tools") or []
     if isinstance(enabled, str):
@@ -534,8 +504,7 @@ def make_builtin_tools(
     available = {
         "event_tool": event_tools.event_tool,
         "get_current_datetime": datetime_tools.get_current_datetime,
-        "send_discord_message": discord_tools.send_discord_message,
-        "send_discord_file": discord_tools.send_discord_file,
+        "send_discord": discord_tools.send_discord,
         "get_current_thread_id": thread_tools.get_current_thread_id,
         "read_file": filesystem_tools.read_file,
         "list_uploads": filesystem_tools.list_uploads,
@@ -552,8 +521,7 @@ def make_builtin_tools(
         elif item == "datetime":
             functions["get_current_datetime"] = available["get_current_datetime"]
         elif item == "discord":
-            functions["send_discord_message"] = available["send_discord_message"]
-            functions["send_discord_file"] = available["send_discord_file"]
+            functions["send_discord"] = available["send_discord"]
         elif item == "thread":
             functions["get_current_thread_id"] = available["get_current_thread_id"]
         elif item == "filesystem":

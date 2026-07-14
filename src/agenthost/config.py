@@ -299,7 +299,7 @@ class AgentConfig:
         return (
             "\n\n# Available Agents\n\n"
             "You can delegate work to the following agents. "
-            "Use `read_agent_folder(name)` for full details before spawning.\n\n"
+            "Use `list_agents()` for their current status and full capabilities.\n\n"
             + "\n\n".join(entries)
         )
 

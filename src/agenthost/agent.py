@@ -375,7 +375,7 @@ class Agent:
             current_user = normalized_history.pop()
             # Prepend the thread_id to the latest user message so the agent always
             # knows which conversation it is in. This is needed for tools like
-            # send_discord_message that must target the same channel/thread.
+            # send_discord that must target the same channel/thread.
             # Memory stays clean because we only modify the copy sent to the LLM.
             current_user = {
                 **current_user,
