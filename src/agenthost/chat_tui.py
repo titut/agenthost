@@ -1,4 +1,5 @@
 """Textual TUI for agenthost chat."""
+
 from __future__ import annotations
 
 import asyncio
@@ -32,7 +33,6 @@ from textual.widgets import (
     Static,
     TextArea,
 )
-
 
 # Operations are scoped to the directory from which agenthost was invoked.
 _REPO_ROOT = Path.cwd()
@@ -186,7 +186,7 @@ class UserMessage(Static):
 
 
 class AssistantMessage(Vertical):
-    """A streaming assistant message rendered as Markdown."""
+    """A streaming assistant message using a read-only TextArea for text selection."""
 
     DEFAULT_CSS = """
     AssistantMessage {
@@ -195,9 +195,15 @@ class AssistantMessage(Vertical):
         min-height: 1;
         padding: 0 2 1 2;
     }
-    AssistantMessage Static {
+    AssistantMessage TextArea {
         width: 100%;
         height: auto;
+        border: none;
+        background: transparent;
+        padding: 0;
+    }
+    AssistantMessage TextArea:focus {
+        border: none;
     }
     """
 
@@ -207,18 +213,14 @@ class AssistantMessage(Vertical):
         super().__init__(**kwargs)
 
     def compose(self) -> ComposeResult:
-        yield Static("", markup=False)
+        yield TextArea("", read_only=True, show_line_numbers=False)
 
     def watch_content(self, content: str) -> None:
         try:
-            static = self.query_one(Static)
+            text_area = self.query_one(TextArea)
         except NoMatches:
             return
-        try:
-            renderable: Any = RichMarkdown(content)
-        except Exception:  # noqa: BLE001
-            renderable = Text(content)
-        static.update(renderable)
+        text_area.text = content
         self.refresh(layout=True)
 
 
@@ -551,7 +553,9 @@ class InputArea(Horizontal):
                 self.completion_list.remove_class("-visible")
                 return
 
-            candidates = [p for p in _collect_repo_files(prefix) if p.startswith(prefix)]
+            candidates = [
+                p for p in _collect_repo_files(prefix) if p.startswith(prefix)
+            ]
             self._completions = candidates[:20]
             self._completion_index = -1
             self.completion_list.clear()
@@ -606,7 +610,9 @@ class InputArea(Horizontal):
             if self._completions:
                 event.prevent_default()
                 event.stop()
-                self._completion_index = (self._completion_index + 1) % len(self._completions)
+                self._completion_index = (self._completion_index + 1) % len(
+                    self._completions
+                )
                 self.completion_list.index = self._completion_index
                 self._accept_completion()
             return
@@ -615,7 +621,9 @@ class InputArea(Horizontal):
             if self._completions:
                 event.prevent_default()
                 event.stop()
-                self._completion_index = (self._completion_index - 1) % len(self._completions)
+                self._completion_index = (self._completion_index - 1) % len(
+                    self._completions
+                )
                 self.completion_list.index = self._completion_index
                 return
             if ta.cursor_location and ta.cursor_location[0] == 0:
@@ -628,7 +636,9 @@ class InputArea(Horizontal):
             if self._completions:
                 event.prevent_default()
                 event.stop()
-                self._completion_index = (self._completion_index + 1) % len(self._completions)
+                self._completion_index = (self._completion_index + 1) % len(
+                    self._completions
+                )
                 self.completion_list.index = self._completion_index
                 return
             if ta.cursor_location and ta.cursor_location[0] == ta.text.count("\n"):
@@ -742,6 +752,7 @@ class ChatApp(App):
 
     BINDINGS = [
         ("ctrl+c", "interrupt", "Interrupt"),
+        ("ctrl+shift+c", "copy", "Copy"),
         ("ctrl+q", "quit", "Quit"),
     ]
 
@@ -772,7 +783,11 @@ class ChatApp(App):
             pass
         yield ContextPanel()
         yield InputArea(id="input-area")
-        yield Static("Ready. Type a message and press Enter to send.", id="status-bar", markup=False)
+        yield Static(
+            "Ready. Type a message and press Enter to send.",
+            id="status-bar",
+            markup=False,
+        )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -856,7 +871,9 @@ class ChatApp(App):
         self.thread_id = uuid.uuid4().hex
         self._update_header(self.agent_name, self.thread_id)
 
-        await self.chat_scroll.mount(Static("Thread cleared. Started a new thread.", markup=False))
+        await self.chat_scroll.mount(
+            Static("Thread cleared. Started a new thread.", markup=False)
+        )
         self.chat_scroll.scroll_end(animate=False)
         if server_cleared:
             self._set_status("Ready.")
@@ -918,15 +935,65 @@ class ChatApp(App):
         self._current_tool = None
 
         # Render the conversation history.
-        for msg in messages:
+        # We use a while loop with an index so we can look ahead at tool messages
+        # that follow an assistant's tool_calls.
+        i = 0
+        n = len(messages)
+        while i < n:
+            msg = messages[i]
             role = msg.get("role")
-            content = msg.get("content") or ""
-            if role == "user" and content:
-                await self.chat_scroll.mount(UserMessage(content))
-            elif role == "assistant" and content:
-                assistant = AssistantMessage()
-                await self.chat_scroll.mount(assistant)
-                assistant.content = content
+
+            if role == "user":
+                content = msg.get("content") or ""
+                if content:
+                    await self.chat_scroll.mount(UserMessage(content))
+                i += 1
+
+            elif role == "assistant":
+                tool_calls = msg.get("tool_calls")
+                if tool_calls:
+                    # Render each tool call and its matching tool response.
+                    for tc in tool_calls:
+                        name = tc.get("function", {}).get("name", "tool")
+                        try:
+                            arguments = json.loads(
+                                tc.get("function", {}).get("arguments", "{}")
+                            )
+                        except json.JSONDecodeError:
+                            arguments = {}
+                        await self.chat_scroll.mount(ToolCallCard(name, arguments))
+                        # Look for the matching tool response among following messages.
+                        tc_id = tc.get("id")
+                        if tc_id:
+                            for j in range(i + 1, n):
+                                next_msg = messages[j]
+                                if (
+                                    next_msg.get("role") == "tool"
+                                    and next_msg.get("tool_call_id") == tc_id
+                                ):
+                                    tool_name = next_msg.get("name", name)
+                                    result = next_msg.get("content", "")
+                                    await self.chat_scroll.mount(
+                                        ToolResultCard(tool_name, result)
+                                    )
+                                    break
+                    # Skip past the assistant message with tool_calls.
+                    i += 1
+                else:
+                    content = msg.get("content") or ""
+                    if content:
+                        assistant = AssistantMessage()
+                        await self.chat_scroll.mount(assistant)
+                        assistant.content = content
+                    i += 1
+
+            elif role == "tool":
+                # Tool messages are handled when rendering the preceding assistant's
+                # tool_calls above. Skip standalone orphan tool messages.
+                i += 1
+
+            else:
+                i += 1
 
         self.chat_scroll.scroll_end(animate=False)
         self._set_status(f"Loaded thread {thread_id}.")
@@ -1077,6 +1144,33 @@ class ChatApp(App):
             rel = str(target.relative_to(_REPO_ROOT.resolve()))
             self.context_panel.add_touched([rel])
 
+    def action_copy(self) -> None:
+        """Copy selected text from the currently focused widget to clipboard."""
+        focused = self.focused
+        if focused is not None and isinstance(focused, TextArea):
+            selected = focused.selected_text
+            if selected:
+                import pyperclip
+
+                pyperclip.copy(selected)
+                self._set_status("Copied selected text.")
+                return
+
+        # Fallback: copy the full content of the last assistant message.
+        for child in reversed(self.chat_scroll.children):
+            if isinstance(child, AssistantMessage):
+                try:
+                    text_area = child.query_one(TextArea)
+                    import pyperclip
+
+                    pyperclip.copy(text_area.text)
+                    self._set_status("Copied last response.")
+                except NoMatches:
+                    self._set_status("Nothing to copy.")
+                return
+
+        self._set_status("Nothing to copy.")
+
     def action_interrupt(self) -> None:
         if self._stream_task and not self._stream_task.done():
             self._stream_task.cancel()
@@ -1196,9 +1290,7 @@ class ChatlessApp(App):
                     )
         except httpx.HTTPStatusError as exc:
             detail = exc.response.text or str(exc)
-            self.call_next(
-                self._render_system_line, stream_id, f"HTTP error: {detail}"
-            )
+            self.call_next(self._render_system_line, stream_id, f"HTTP error: {detail}")
             self.call_next(self._set_status, f"HTTP error: {detail}")
         except httpx.RequestError as exc:
             self.call_next(
@@ -1206,14 +1298,10 @@ class ChatlessApp(App):
             )
             self.call_next(self._set_status, f"Connection error: {exc}")
         except Exception as exc:  # noqa: BLE001
-            self.call_next(
-                self._render_system_line, stream_id, f"Stream error: {exc}"
-            )
+            self.call_next(self._render_system_line, stream_id, f"Stream error: {exc}")
             self.call_next(self._set_status, f"Stream error: {exc}")
 
-    async def _render_event(
-        self, stream_id: int, event_type: str, data: str
-    ) -> None:
+    async def _render_event(self, stream_id: int, event_type: str, data: str) -> None:
         if stream_id != self._stream_id:
             return
 
@@ -1221,9 +1309,7 @@ class ChatlessApp(App):
         prefix = f"[{timestamp}] [{event_type}]"
 
         if event_type == "meta":
-            await self.event_log.mount(
-                Static(f"{prefix} {data}", classes="event-line")
-            )
+            await self.event_log.mount(Static(f"{prefix} {data}", classes="event-line"))
         elif event_type == "heartbeat":
             self._set_status(f"Heartbeat at {timestamp}")
         elif event_type == "done":
@@ -1254,8 +1340,16 @@ class ChatlessApp(App):
                     Static(f"{prefix} thinking: {payload_data}", classes="event-line")
                 )
             elif subtype == "tool_start":
-                name = payload_data.get("name", "tool") if isinstance(payload_data, dict) else "tool"
-                args = payload_data.get("arguments", {}) if isinstance(payload_data, dict) else {}
+                name = (
+                    payload_data.get("name", "tool")
+                    if isinstance(payload_data, dict)
+                    else "tool"
+                )
+                args = (
+                    payload_data.get("arguments", {})
+                    if isinstance(payload_data, dict)
+                    else {}
+                )
                 await self.event_log.mount(
                     Static(
                         f"{prefix} tool_start: {name}({json.dumps(args, default=str)})",
@@ -1263,8 +1357,16 @@ class ChatlessApp(App):
                     )
                 )
             elif subtype == "tool_result":
-                name = payload_data.get("name", "tool") if isinstance(payload_data, dict) else "tool"
-                result = payload_data.get("result", "") if isinstance(payload_data, dict) else ""
+                name = (
+                    payload_data.get("name", "tool")
+                    if isinstance(payload_data, dict)
+                    else "tool"
+                )
+                result = (
+                    payload_data.get("result", "")
+                    if isinstance(payload_data, dict)
+                    else ""
+                )
                 await self.event_log.mount(
                     Static(
                         f"{prefix} tool_result: {name} -> {str(result)[:200]}",
@@ -1272,8 +1374,16 @@ class ChatlessApp(App):
                     )
                 )
             elif subtype == "tool_error":
-                name = payload_data.get("name", "tool") if isinstance(payload_data, dict) else "tool"
-                error = payload_data.get("error", "") if isinstance(payload_data, dict) else ""
+                name = (
+                    payload_data.get("name", "tool")
+                    if isinstance(payload_data, dict)
+                    else "tool"
+                )
+                error = (
+                    payload_data.get("error", "")
+                    if isinstance(payload_data, dict)
+                    else ""
+                )
                 await self.event_log.mount(
                     Static(
                         f"{prefix} tool_error: {name} -> {error}",
@@ -1285,9 +1395,7 @@ class ChatlessApp(App):
                     Static(f"{prefix} {subtype}: {payload_data}", classes="event-line")
                 )
         else:
-            await self.event_log.mount(
-                Static(f"{prefix} {data}", classes="event-line")
-            )
+            await self.event_log.mount(Static(f"{prefix} {data}", classes="event-line"))
 
         self.event_log.scroll_end(animate=False)
 

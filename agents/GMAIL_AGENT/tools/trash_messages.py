@@ -23,14 +23,22 @@ _build_gmail_service = _gmail_base.build_gmail_service
 def _trash_one(message_id: str) -> dict[str, Any]:
     auth_result = _build_gmail_service()
     if "error" in auth_result:
-        return {"success": False, "message_id": message_id, "error": auth_result.get("error")}
+        return {
+            "success": False,
+            "message_id": message_id,
+            "error": auth_result.get("error"),
+        }
     service = auth_result["service"]
     try:
         service.users().messages().trash(userId="me", id=message_id).execute()
         return {"success": True, "message_id": message_id, "action": "trashed"}
     except HttpError as exc:
         status = exc.resp.status if exc.resp is not None else 0
-        return {"success": False, "message_id": message_id, "error": f"Gmail API error ({status}): {exc}"}
+        return {
+            "success": False,
+            "message_id": message_id,
+            "error": f"Gmail API error ({status}): {exc}",
+        }
     except Exception as exc:  # noqa: BLE001
         return {"success": False, "message_id": message_id, "error": str(exc)}
 
@@ -38,14 +46,22 @@ def _trash_one(message_id: str) -> dict[str, Any]:
 def _untrash_one(message_id: str) -> dict[str, Any]:
     auth_result = _build_gmail_service()
     if "error" in auth_result:
-        return {"success": False, "message_id": message_id, "error": auth_result.get("error")}
+        return {
+            "success": False,
+            "message_id": message_id,
+            "error": auth_result.get("error"),
+        }
     service = auth_result["service"]
     try:
         service.users().messages().untrash(userId="me", id=message_id).execute()
         return {"success": True, "message_id": message_id, "action": "untrashed"}
     except HttpError as exc:
         status = exc.resp.status if exc.resp is not None else 0
-        return {"success": False, "message_id": message_id, "error": f"Gmail API error ({status}): {exc}"}
+        return {
+            "success": False,
+            "message_id": message_id,
+            "error": f"Gmail API error ({status}): {exc}",
+        }
     except Exception as exc:  # noqa: BLE001
         return {"success": False, "message_id": message_id, "error": str(exc)}
 
@@ -53,14 +69,26 @@ def _untrash_one(message_id: str) -> dict[str, Any]:
 def _delete_one(message_id: str) -> dict[str, Any]:
     auth_result = _build_gmail_service()
     if "error" in auth_result:
-        return {"success": False, "message_id": message_id, "error": auth_result.get("error")}
+        return {
+            "success": False,
+            "message_id": message_id,
+            "error": auth_result.get("error"),
+        }
     service = auth_result["service"]
     try:
         service.users().messages().delete(userId="me", id=message_id).execute()
-        return {"success": True, "message_id": message_id, "action": "deleted_permanently"}
+        return {
+            "success": True,
+            "message_id": message_id,
+            "action": "deleted_permanently",
+        }
     except HttpError as exc:
         status = exc.resp.status if exc.resp is not None else 0
-        return {"success": False, "message_id": message_id, "error": f"Gmail API error ({status}): {exc}"}
+        return {
+            "success": False,
+            "message_id": message_id,
+            "error": f"Gmail API error ({status}): {exc}",
+        }
     except Exception as exc:  # noqa: BLE001
         return {"success": False, "message_id": message_id, "error": str(exc)}
 
@@ -80,10 +108,7 @@ def _run_parallel(
 
     results: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_id = {
-            executor.submit(worker, mid): mid
-            for mid in message_ids
-        }
+        future_to_id = {executor.submit(worker, mid): mid for mid in message_ids}
         for future in as_completed(future_to_id):
             results.append(future.result())
 
@@ -136,37 +161,3 @@ def untrash_messages(
         ``{"success": True, "results": [...]}`` with per-message outcomes.
     """
     return _run_parallel(message_ids, _untrash_one, max_workers)
-
-
-def delete_messages_permanently(
-    message_ids: list[str],
-    confirmed: bool = False,
-    max_workers: int = 5,
-) -> dict[str, Any]:
-    """Permanently delete multiple messages in parallel.
-
-    .. warning:: This is irreversible. Requires ``confirmed=True``.
-
-    Each worker thread builds its own Gmail API service to avoid thread-safety
-    issues with googleapiclient.
-
-    Parameters
-    ----------
-    message_ids : list[str]
-        Gmail message IDs to delete.
-    confirmed : bool
-        Must be ``True`` to actually delete.
-    max_workers : int, optional
-        Maximum parallel API calls (default 5).
-
-    Returns
-    -------
-    dict
-        ``{"success": True, "results": [...]}`` with per-message outcomes.
-    """
-    if not confirmed:
-        return {
-            "success": False,
-            "error": "Permanent deletion requires confirmed=True.",
-        }
-    return _run_parallel(message_ids, _delete_one, max_workers)
