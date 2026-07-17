@@ -684,7 +684,7 @@ async def process_agent_request(
         await safe_send(channel, "⏹️ Agent stopped.")
     except Exception as exc:
         log("error", f"Failed to handle message: {exc}")
-        await safe_send(channel, f"Sorry, I couldn't process that: {exc}")
+        await safe_send(channel, "Sorry, I couldn't process that. Please try again in a moment.")
     finally:
         # Nothing to clean up here; run_agent_request_task manages active_tasks.
         pass
