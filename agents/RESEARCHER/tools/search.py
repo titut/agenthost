@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
+import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DEFAULT_MAX_CHARS = 10_000
+from agenthost.tools import current_agent_config, current_thread_id
+
+DEFAULT_MAX_CHARS = 5_000
 FETCH_BATCH_SIZE = 5
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 150
-TOP_K_CHUNKS = 12
+TOP_K_CHUNKS = 8
+MAX_QUERIES_PER_PLAN = 5
+MAX_RESULTS_PER_QUERY = 3
 
 # DeepInfra OpenAI-compatible embedding endpoint. The API key is expected to be
 # provided by agenthost via the environment (OPENAI_API_KEY or DEEPINFRA_API_KEY).
@@ -197,26 +204,92 @@ async def _retrieve_top_chunks(
     return [chunk for _score, chunk in scored[:top_k]]
 
 
-async def web_search(
+def _memory_db_path() -> Path | None:
+    """Return the SQLite memory DB path for the current agent config."""
+    cfg = current_agent_config.get()
+    if cfg is None:
+        return None
+    return cfg.memory_dir / "memory.db"
+
+
+def _get_latest_user_message_time(thread_id: str) -> str | None:
+    """Return the timestamp of the latest user message in this thread."""
+    db_path = _memory_db_path()
+    if db_path is None:
+        return None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            row = conn.execute(
+                "SELECT MAX(created_at) FROM messages WHERE thread_id = ? AND role = 'user'",
+                (thread_id,),
+            ).fetchone()
+            return row[0] if row and row[0] else None
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _budget_key(thread_id: str, user_message_time: str) -> str:
+    return f"research_budget:{thread_id}:{user_message_time}"
+
+
+def _has_research_budget(thread_id: str) -> bool:
+    """Return True if the current user turn has not yet used its research budget."""
+    db_path = _memory_db_path()
+    if db_path is None or not db_path.exists():
+        return True
+    user_time = _get_latest_user_message_time(thread_id)
+    if user_time is None:
+        return True
+    key = _budget_key(thread_id, user_time)
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+            return row is None
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _use_research_budget(thread_id: str) -> None:
+    """Mark the current user turn's research budget as used."""
+    db_path = _memory_db_path()
+    if db_path is None:
+        return
+    user_time = _get_latest_user_message_time(thread_id)
+    if user_time is None:
+        return
+    key = _budget_key(thread_id, user_time)
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(
+                "INSERT INTO kv (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (
+                    key,
+                    json.dumps(
+                        {"used": True, "at": datetime.now(timezone.utc).isoformat()}
+                    ),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _execute_single_search(
     query: str,
-    max_results: int = 5,
+    max_results: int = MAX_RESULTS_PER_QUERY,
     max_chars: int = DEFAULT_MAX_CHARS,
 ) -> dict[str, Any]:
-    """Search the web and return the most relevant page chunks.
-
-    Runs a DuckDuckGo search for *query*, fetches the top *max_results* pages,
-    splits them into overlapping chunks, embeds the query and chunks via
-    DeepInfra, and returns only the top-K most relevant chunks.
-
-    Args:
-        query: The search query.
-        max_results: Number of search results to fetch (default 5).
-        max_chars: Maximum characters of extracted text per page (default 10 000).
-
-    Returns:
-        A dict with the original query and a "chunks" list. Each chunk has
-        keys: text, title, url.
-    """
+    """Run a single DuckDuckGo search, fetch pages, and return top chunks."""
     search_result = _search_ddg(query, max_results)
     if "error" in search_result:
         return search_result
@@ -292,10 +365,76 @@ async def web_search(
     return {"query": query, "chunks": top_chunks}
 
 
+async def research_query(question: str, plan: list[str]) -> dict[str, Any]:
+    """Execute a bounded research plan and return the most relevant chunks.
+
+    This is the only search tool the RESEARCHER agent should use. It accepts a
+    list of 1 to 5 search queries, runs them all in one call, and returns the
+    top-ranked passages combined from every query. It can be called at most once
+    per user turn.
+
+    Args:
+        question: The original user question being answered.
+        plan: A list of 1 to 5 specific search queries.
+
+    Returns:
+        A dict with the original question, the executed plan, and a "chunks" list.
+        Each chunk has keys: text, title, url.
+    """
+    if not isinstance(plan, list) or not plan:
+        return {
+            "error": "You must provide a non-empty list of search queries in 'plan'."
+        }
+
+    if len(plan) > MAX_QUERIES_PER_PLAN:
+        plan = plan[:MAX_QUERIES_PER_PLAN]
+
+    thread_id = current_thread_id.get()
+    if thread_id is None:
+        return {"error": "No thread ID is available; cannot track research budget."}
+
+    if not _has_research_budget(thread_id):
+        return {
+            "error": (
+                "You have already used your research budget for this turn. "
+                "Stop searching and synthesize an answer from the information you already have."
+            )
+        }
+
+    _use_research_budget(thread_id)
+
+    all_chunks: list[dict[str, Any]] = []
+    for query in plan:
+        result = await _execute_single_search(query)
+        if "error" in result:
+            continue
+        all_chunks.extend(result.get("chunks", []))
+
+    if not all_chunks:
+        return {
+            "question": question,
+            "plan": plan,
+            "chunks": [],
+            "note": "No usable content was found for any query in the plan.",
+        }
+
+    try:
+        top_chunks = await _retrieve_top_chunks(question, all_chunks, TOP_K_CHUNKS)
+    except RuntimeError as exc:
+        return {
+            "question": question,
+            "plan": plan,
+            "chunks": [],
+            "error": str(exc),
+        }
+
+    return {"question": question, "plan": plan, "chunks": top_chunks}
+
+
 def calculate(expression: str) -> dict:
     """Evaluate a simple math expression safely.
 
-    Supports +, -, *, /, parentheses, and decimal numbers.
+    Supports +, -, *, /, parentheses, decimal numbers, and powers.
     """
     import ast
     import operator

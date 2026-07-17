@@ -436,8 +436,10 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
 
     descriptions: list[str] = [
         "- `get_current_datetime()`: Return the current date and time. "
-        "Use this whenever the user asks about the current date, time, day, year, or any "
-        "time-sensitive question (e.g. involving 'now', 'today', 'latest', 'recent', or a deadline)."
+        "The current date and time are also included in the system prompt on every request, "
+        "so you usually do not need this tool. Use it only when you need to confirm the exact "
+        "current time in a structured format or when the system prompt timestamp seems "
+        "inconsistent with the user's question."
     ]
     if "events" in enabled or "event_tool" in enabled:
         descriptions.append(

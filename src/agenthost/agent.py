@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 from openai import AsyncOpenAI, BadRequestError
@@ -12,6 +13,16 @@ from agenthost.config import AgentConfig, _estimate_tokens
 from agenthost.logger import setup_logging
 from agenthost.memory import AgentMemory
 from agenthost.tools import ToolRunner, discover_tools
+
+
+def _current_datetime_message() -> str:
+    """Return a concise current date and time message for the system prompt."""
+    now = datetime.now(timezone.utc).astimezone()
+    return (
+        f"Current date and time: {now.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"({now.strftime('%Z')}, UTC offset {now.strftime('%z')}). "
+        f"Use this when answering questions about 'today', 'now', 'current', or any time-sensitive topic."
+    )
 
 
 logger = setup_logging("agenthost.agent")
@@ -389,6 +400,11 @@ class Agent:
 
         if current_user is not None:
             messages.append(current_user)
+
+        # The current date and time are injected on every request so the agent
+        # always has a fresh temporal reference, even when previous tool results
+        # in the conversation history are stale.
+        messages.append({"role": "system", "content": _current_datetime_message()})
 
         # Place the critical-instruction reminder at the very end of the payload.
         # This ensures it is the freshest context for the next assistant generation,

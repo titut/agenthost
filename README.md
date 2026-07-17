@@ -258,10 +258,10 @@ The ORCHESTRATOR takes any request, decomposes it into ordered steps, assigns th
 
 ### RESEARCHER — Research Assistant
 
-A curious research assistant that finds information, summarizes topics, and thinks step by step.
+A bounded factual researcher that plans a small number of searches, executes them once, and synthesizes a cited answer.
 
 **Tools:**
-- `web_search(query, max_results=5)` — DuckDuckGo search + fetch page content (no API key required)
+- `research_query(question, plan)` — DuckDuckGo search with a plan of up to 5 queries, fetches pages, and returns the most relevant chunks (no API key required)
 - `calculate(expression)` — Evaluate mathematical expressions
 
 **Skills:** `web-search.md` — guidance on when and how to use search tools.
@@ -385,7 +385,7 @@ def weather(city: str) -> str:
 - Both sync and async functions are supported (sync functions run in a thread pool)
 - Return strings or JSON-serializable objects
 
-The RESEARCHER agent ships with a free web search tool (`web_search`) powered by DuckDuckGo via the `ddgs` package, which also fetches the result pages with Crawl4AI — no API key required.
+The RESEARCHER agent ships with a free web search tool (`research_query`) powered by DuckDuckGo via the `ddgs` package, which also fetches the result pages with Crawl4AI — no API key required.
 
 ---
 
@@ -584,7 +584,7 @@ Response:
   "status": "ok",
   "agent": "RESEARCHER",
   "model": "gpt-4o-mini",
-  "tools": ["web_search", "calculate"]
+  "tools": ["research_query", "calculate"]
 }
 ```
 
