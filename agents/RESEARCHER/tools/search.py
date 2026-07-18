@@ -24,7 +24,7 @@ MAX_RESULTS_PER_QUERY = 3
 # DeepInfra OpenAI-compatible embedding endpoint. The API key is expected to be
 # provided by agenthost via the environment (OPENAI_API_KEY or DEEPINFRA_API_KEY).
 EMBEDDING_BASE_URL = "https://api.deepinfra.com/v1/openai"
-EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
+EMBEDDING_MODEL = "BAAI/bge-m3"
 
 
 def _api_key() -> str | None:
@@ -404,18 +404,25 @@ async def research_query(question: str, plan: list[str]) -> dict[str, Any]:
     _use_research_budget(thread_id)
 
     all_chunks: list[dict[str, Any]] = []
+    per_query_issues: list[str] = []
     for query in plan:
         result = await _execute_single_search(query)
         if "error" in result:
+            per_query_issues.append(f"{query}: {result['error']}")
             continue
+        if "note" in result:
+            per_query_issues.append(f"{query}: {result['note']}")
         all_chunks.extend(result.get("chunks", []))
 
     if not all_chunks:
+        note = "No usable content was found for any query in the plan."
+        if per_query_issues:
+            note += " Details: " + " | ".join(per_query_issues)
         return {
             "question": question,
             "plan": plan,
             "chunks": [],
-            "note": "No usable content was found for any query in the plan.",
+            "note": note,
         }
 
     try:
