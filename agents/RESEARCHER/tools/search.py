@@ -13,7 +13,7 @@ from typing import Any
 
 from agenthost.tools import current_agent_config, current_thread_id
 
-DEFAULT_MAX_CHARS = 5_000
+DEFAULT_MAX_CHARS = 15_000
 FETCH_BATCH_SIZE = 5
 CHUNK_SIZE = 1_500
 CHUNK_OVERLAP = 250
