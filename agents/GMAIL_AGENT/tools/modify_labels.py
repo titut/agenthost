@@ -118,19 +118,21 @@ def _batch_modify(
 
 def add_labels_to_messages(
     message_ids: list[str],
-    label_names: list[str],
+    labels: str,
 ) -> dict[str, Any]:
-    """Add labels to multiple messages in a single batch API call.
+    """Apply a single label to multiple messages in one batch API call.
 
-    Labels are specified by **name** (e.g. ``"Work"`` or ``"INBOX"``). The
-    function resolves names to their Gmail IDs for you.
+    The ``labels`` parameter accepts exactly one label name (e.g. ``"Work"`` or
+    ``"INBOX"``). That label is resolved to its Gmail ID and applied to every
+    message in ``message_ids``.
 
     Parameters
     ----------
     message_ids : list[str]
         Gmail message IDs to label.
-    label_names : list[str]
-        Label names to add (case-insensitive).  Unknown names are ignored.
+    labels : str
+        A single label name to add to all of the messages (case-insensitive).
+        Unknown names are ignored.
 
     Returns
     -------
@@ -140,10 +142,13 @@ def add_labels_to_messages(
     """
     if not message_ids:
         return {"success": False, "error": "message_ids is required"}
-    if not label_names or not isinstance(label_names, list) or len(label_names) == 0:
-        return {"success": False, "error": "label_names must be a non-empty list"}
+    if not labels or not isinstance(labels, str):
+        return {
+            "success": False,
+            "error": "labels must be a non-empty string containing one label name",
+        }
 
-    resolved = _resolve_label_names(label_names)
+    resolved = _resolve_label_names([labels])
     if resolved.get("error"):
         return resolved
 
@@ -171,12 +176,13 @@ def add_labels_to_messages(
 
 def remove_labels_from_messages(
     message_ids: list[str],
-    label_names: list[str],
+    labels: str,
 ) -> dict[str, Any]:
-    """Remove labels from multiple messages in a single batch API call.
+    """Remove a single label from multiple messages in one batch API call.
 
-    Labels are specified by **name** (e.g. ``"Work"``). The function resolves
-    names to their Gmail IDs for you.
+    The ``labels`` parameter accepts exactly one label name (e.g. ``"Work"``).
+    That label is resolved to its Gmail ID and removed from every message in
+    ``message_ids``.
 
     System labels ``INBOX``, ``SENT``, ``STARRED``, and ``IMPORTANT`` cannot be
     manually removed and will be ignored.
@@ -185,8 +191,9 @@ def remove_labels_from_messages(
     ----------
     message_ids : list[str]
         Gmail message IDs to update.
-    label_names : list[str]
-        Label names to remove (case-insensitive). Unknown names are ignored.
+    labels : str
+        A single label name to remove from all of the messages
+        (case-insensitive). Unknown names are ignored.
 
     Returns
     -------
@@ -197,10 +204,13 @@ def remove_labels_from_messages(
     """
     if not message_ids:
         return {"success": False, "error": "message_ids is required"}
-    if not label_names or not isinstance(label_names, list) or len(label_names) == 0:
-        return {"success": False, "error": "label_names must be a non-empty list"}
+    if not labels or not isinstance(labels, str):
+        return {
+            "success": False,
+            "error": "labels must be a non-empty string containing one label name",
+        }
 
-    resolved = _resolve_label_names(label_names)
+    resolved = _resolve_label_names([labels])
     if resolved.get("error"):
         return resolved
 
