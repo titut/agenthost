@@ -10,6 +10,7 @@ from openai import AsyncOpenAI, BadRequestError
 
 from agenthost.builtin_tools import build_builtin_tools_prompt, make_builtin_tools
 from agenthost.config import AgentConfig, _estimate_tokens
+from agenthost.embeddings import EmbeddingClient
 from agenthost.logger import setup_logging
 from agenthost.memory import AgentMemory
 from agenthost.tools import ToolRunner, discover_tools
@@ -43,7 +44,8 @@ class Agent:
             if config.base_url:
                 kwargs["base_url"] = config.base_url
             self.client = AsyncOpenAI(**kwargs)
-        self.memory = AgentMemory(config)
+        self.embedding_client = EmbeddingClient(config.embedding)
+        self.memory = AgentMemory(config, self.embedding_client)
         builtins = make_builtin_tools(config, scheduler, agent_provider=lambda: self)
         self.tool_schemas, self.tool_runner = discover_tools(config.tools_dir, builtins, config=config)
         self.system_prompt_initial = config.system_prompt + build_builtin_tools_prompt(config)
@@ -64,8 +66,8 @@ class Agent:
             logger.warning(
                 "Repaired %d dangling tool_calls in thread '%s'", removed, thread_id
             )
-        self.memory.append_message(thread_id, {"role": "user", "content": user_message})
-        messages = self._build_messages(thread_id)
+        await self.memory.append_message(thread_id, {"role": "user", "content": user_message})
+        messages = await self._build_messages(thread_id)
 
         attempt = 0
         max_attempts = 5
@@ -73,9 +75,9 @@ class Agent:
         max_tool_rounds = 15
         recent_tool_errors: list[str] = []
 
-        def _graceful_error(message: str) -> str:
+        async def _graceful_error(message: str) -> str:
             logger.error(message)
-            self.memory.append_message(thread_id, {"role": "assistant", "content": message})
+            await self.memory.append_message(thread_id, {"role": "assistant", "content": message})
             return json.dumps({"type": "error", "data": message}) + "\n"
 
         while True:
@@ -140,7 +142,7 @@ class Agent:
                 except Exception as repair_err:
                     logger.warning("Repair failed for thread '%s': %s", thread_id, repair_err)
 
-                messages = self._build_messages(thread_id)
+                messages = await self._build_messages(thread_id)
                 await asyncio.sleep(1)
                 continue
 
@@ -282,7 +284,7 @@ class Agent:
                     json.dumps(tool_calls, default=str),
                 )
                 # Persist assistant's tool call request.
-                self.memory.append_message(thread_id, {"role": "assistant", "tool_calls": tool_calls})
+                await self.memory.append_message(thread_id, {"role": "assistant", "tool_calls": tool_calls})
 
                 for tc in tool_calls:
                     name = tc["function"]["name"]
@@ -328,13 +330,13 @@ class Agent:
                         "name": name,
                         "content": result,
                     }
-                    self.memory.append_message(thread_id, tool_msg)
+                    await self.memory.append_message(thread_id, tool_msg)
 
                 # Rebuild the message list from memory so the final system prompt
                 # (critical instructions) is placed after the tool results. Without
                 # this, the model only sees the reminder before the original user
                 # message and may treat the tool result as the end of the turn.
-                messages = self._build_messages(thread_id)
+                messages = await self._build_messages(thread_id)
                 continue
 
             if assistant_content:
@@ -343,7 +345,7 @@ class Agent:
                     thread_id,
                     assistant_content,
                 )
-                self.memory.append_message(thread_id, {"role": "assistant", "content": assistant_content})
+                await self.memory.append_message(thread_id, {"role": "assistant", "content": assistant_content})
             logger.info(
                 "Agent '%s' thread '%s' finished turn with %d total messages",
                 self.config.name,
@@ -352,14 +354,12 @@ class Agent:
             )
             break
 
-    def _build_messages(self, thread_id: str) -> list[dict[str, Any]]:
+    async def _build_messages(self, thread_id: str) -> list[dict[str, Any]]:
         # Build the prompt for the next generation. The initial system prompt
-        # (WHOAMI / role) goes at the start, conversation history follows, the
-        # current user message comes next, and the final system prompt (critical
-        # instructions / reminder) is placed at the very end. Keeping the
-        # critical instructions as the freshest context helps the model remember
-        # to reply after tool results, because the message list is rebuilt from
-        # memory after each tool round.
+        # (WHOAMI / role) goes at the start, optional RAG context from older
+        # messages follows, then the recent conversation history, the current
+        # user message, the current date/time, and finally the critical
+        # instructions as the freshest context.
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt_initial}
         ]
@@ -370,20 +370,54 @@ class Agent:
         # corrupted threads are repaired on disk, not just in the request payload.
         normalized_history, was_modified = Agent._normalize_messages(history)
         if was_modified:
-            self.memory.rewrite_thread(thread_id, normalized_history)
+            await self.memory.rewrite_thread(thread_id, normalized_history)
 
-        # Trim from the latest message backward so the loaded conversation stays
-        # within the configured token budget. Cuts happen only at user-message
-        # boundaries so assistant tool_call + tool response groups stay intact.
-        normalized_history = self._trim_history_by_tokens(normalized_history, thread_id)
+        # Split history into the recent window (verbatim) and older messages
+        # (retrieved via RAG). Keep at least the current user turn if it exists.
+        cfg = self.config.memory
+        recent_count = max(cfg.recent_messages, 1)
+        recent_history = normalized_history[-recent_count:]
+        older_history = normalized_history[:-recent_count] if len(normalized_history) > recent_count else []
+
+        # Use the latest user message as the RAG query. If the current turn is
+        # a tool round, this finds the original user question.
+        query_text = ""
+        for msg in reversed(normalized_history):
+            if msg.get("role") == "user" and msg.get("content"):
+                query_text = msg["content"]
+                break
+
+        # Retrieve relevant chunks from older messages, excluding any that are
+        # already in the recent window.
+        if older_history and query_text:
+            recent_ids = {msg.get("id") for msg in recent_history if msg.get("id")}
+            rag_chunks = await self.memory.retrieve_relevant_chunks(
+                thread_id,
+                query_text,
+                exclude_message_ids=recent_ids,
+            )
+            if rag_chunks:
+                rag_text = "\n\n".join(
+                    f"[{i + 1}] {chunk['chunk_text']}"
+                    for i, chunk in enumerate(rag_chunks)
+                )
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Relevant context from earlier in the conversation:\n\n"
+                            f"{rag_text}"
+                        ),
+                    }
+                )
 
         # Separate the current user turn from earlier history. The final system
         # prompt reminder is inserted immediately before the current user message
         # so the model sees it right before it must respond.
         current_user: dict[str, Any] | None = None
-        if normalized_history and normalized_history[-1]["role"] == "user":
-            normalized_history = list(normalized_history)
-            current_user = normalized_history.pop()
+        if recent_history and recent_history[-1]["role"] == "user":
+            recent_history = list(recent_history)
+            current_user = recent_history.pop()
             # Prepend the thread_id to the latest user message so the agent always
             # knows which conversation it is in. This is needed for tools like
             # send_discord that must target the same channel/thread.
@@ -393,13 +427,17 @@ class Agent:
                 "content": f"[thread_id: {thread_id}] {current_user['content']}",
             }
 
-        for msg in normalized_history:
+        for msg in recent_history:
             msg_copy = dict(msg)
+            msg_copy.pop("id", None)
             msg_copy.pop("created_at", None)
             messages.append(msg_copy)
 
         if current_user is not None:
-            messages.append(current_user)
+            current_user_copy = dict(current_user)
+            current_user_copy.pop("id", None)
+            current_user_copy.pop("created_at", None)
+            messages.append(current_user_copy)
 
         # The current date and time are injected on every request so the agent
         # always has a fresh temporal reference, even when previous tool results
@@ -413,68 +451,6 @@ class Agent:
             messages.append({"role": "system", "content": self.system_prompt_final})
 
         return messages
-
-    def _trim_history_by_tokens(
-        self, history: list[dict[str, Any]], thread_id: str
-    ) -> list[dict[str, Any]]:
-        """Return the most recent suffix of history that fits in the token budget.
-
-        Walks backward from the latest message and accumulates token estimates
-        until ``max_memory_tokens`` would be exceeded. Cuts are only made at
-        user-message boundaries so that an assistant ``tool_calls`` message and
-        its matching tool responses are never split.
-
-        If ``max_memory_turns`` is also set, the result is further capped to that
-        many messages.
-        """
-        max_tokens = self.config.max_memory_tokens
-        max_turns = self.config.max_memory_turns
-        if max_tokens <= 0 and max_turns <= 0:
-            return history
-
-        n = len(history)
-        token_counts = [_estimate_tokens([msg], self.config.model) for msg in history]
-        prefix = [0]
-        for count in token_counts:
-            prefix.append(prefix[-1] + count)
-
-        # Turn-based cut (keep the most recent max_turns messages).
-        turn_cut = 0
-        if max_turns > 0:
-            turn_cut = max(0, n - max_turns)
-
-        if max_tokens <= 0:
-            return history[turn_cut:]
-
-        # Token-based cut: find the earliest user-message index whose suffix
-        # fits within the budget. Iterating backward and updating the cut index
-        # whenever a suffix fits keeps the maximum number of recent messages.
-        token_cut = n
-        for i in range(n - 1, -1, -1):
-            if history[i].get("role") != "user":
-                continue
-            suffix_tokens = prefix[n] - prefix[i]
-            if suffix_tokens <= max_tokens:
-                token_cut = i
-        if token_cut == n:
-            # No user-message suffix fits the budget; keep at least the latest
-            # user message so the conversation isn't completely empty.
-            for i in range(n - 1, -1, -1):
-                if history[i].get("role") == "user":
-                    token_cut = i
-                    break
-
-        cut = max(turn_cut, token_cut)
-        if cut > 0:
-            logger.debug(
-                "Trimmed thread '%s' history: kept %d/%d messages (~%d/%d tokens)",
-                thread_id,
-                n - cut,
-                n,
-                prefix[n] - prefix[cut],
-                prefix[n],
-            )
-        return history[cut:]
 
     @staticmethod
     def _normalize_messages(

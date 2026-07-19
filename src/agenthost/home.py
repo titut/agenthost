@@ -63,7 +63,9 @@ def _copy_if_exists(src: Path, dst: Path) -> bool:
         return False
     dst.parent.mkdir(parents=True, exist_ok=True)
     if src.is_dir():
-        shutil.copytree(src, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git"))
+        shutil.copytree(
+            src, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git")
+        )
     else:
         shutil.copy2(src, dst)
     return True
@@ -90,7 +92,12 @@ def migrate_legacy_home() -> list[str]:
     migrated: list[str] = []
 
     # Global state files.
-    for name in ("agents.yaml", ".agenthost-registry.json", "agenthost.log", "keys.kdbx"):
+    for name in (
+        "agents.yaml",
+        ".agenthost-registry.json",
+        "agenthost.log",
+        "keys.kdbx",
+    ):
         if _copy_if_exists(legacy / name, home / name):
             migrated.append(name)
 
@@ -125,17 +132,62 @@ def ensure_agenthost_home() -> Path:
     """Create the agenthost home directory if needed and return it.
 
     On the first run with the default ~/.agenthost location, legacy state from
-    the project root is migrated automatically.
+    the project root is migrated automatically.  A ``default_agent.yaml`` is
+    seeded the first time the home directory is created so users have a starting
+    point for global agent defaults.
     """
     migrate_legacy_home()
     home = get_agenthost_home()
     home.mkdir(parents=True, exist_ok=True)
+
+    # Seed default_agent.yaml on first creation so users have a starting point.
+    _seed_default_agent_config(home)
+
     return home
+
+
+def _seed_default_agent_config(home: Path) -> None:
+    """Write a default_agent.yaml if one does not already exist in *home*."""
+    default_yaml = home / "default_agent.yaml"
+    if default_yaml.exists():
+        return
+
+    # Lazy import to avoid circular dependency (config.py imports home.py).
+    import yaml
+
+    from agenthost.config import DEFAULT_CONFIG
+
+    content = (
+        "# Default agent configuration for agenthost.\n"
+        "# Edit this file to set global defaults for all agents.\n"
+        "# Individual agents override these values in their own agent.yaml.\n"
+        "# See templates/agent/agent.yaml for the full reference.\n\n"
+        + yaml.safe_dump(DEFAULT_CONFIG, sort_keys=False, default_flow_style=False)
+        + "\n"
+        "# embedding:\n"
+        "#   model: BAAI/bge-m3\n"
+        "#   base_url: https://api.deepinfra.com/v1ai\n"
+        "#\n"
+        "# memory:\n"
+        "#   mode: rag\n"
+        "#   recent_messages: 8\n"
+        "#   chunk_size: 512\n"
+        "#   budget_tokens: 6000\n"
+        "#   max_chunks: 12\n"
+        "#   max_pool_chunks: 5000\n"
+        "#   similarity_weight: 0.6\n"
+        "#   recency_weight: 0.3\n"
+        "#   role_weight: 0.1\n"
+        "#   mmr_lambda: 0.7\n"
+    )
+    default_yaml.write_text(content, encoding="utf-8")
 
 
 # User home directory for tools that need broader file access.
 # Defaults to the agenthost home so agents are sandboxed inside ~/.agenthost.
-HOME_DIR = Path(os.environ.get("AGENTHOST_HOME", get_agenthost_home())).expanduser().resolve()
+HOME_DIR = (
+    Path(os.environ.get("AGENTHOST_HOME", get_agenthost_home())).expanduser().resolve()
+)
 
 
 def resolve_home_path(path: str) -> Path:

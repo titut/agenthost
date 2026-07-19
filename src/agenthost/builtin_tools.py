@@ -335,7 +335,7 @@ class DiscordTools:
         self.config = config
         self._agent_provider = agent_provider
 
-    def send_discord(self, text: str, thread_id: str, file_path: str = "") -> str:
+    async def send_discord(self, text: str, thread_id: str, file_path: str = "") -> str:
         """Send a Discord message, with an optional file attachment.
 
         The agent can call this from scheduled events or any other workflow to
@@ -370,7 +370,7 @@ class DiscordTools:
             )
             response.raise_for_status()
 
-            self._record_in_memory(
+            await self._record_in_memory(
                 thread_id, text or (f"Sent file: {file_path}" if file_path else "")
             )
 
@@ -415,12 +415,12 @@ class DiscordTools:
 
         return resolved
 
-    def _record_in_memory(self, thread_id: str, message: str) -> None:
+    async def _record_in_memory(self, thread_id: str, message: str) -> None:
         """Record an outbound Discord interaction in the agent's memory."""
         agent = self._agent_provider() if self._agent_provider else None
         if agent is not None:
             try:
-                agent.memory.append_message(
+                await agent.memory.append_message(
                     thread_id,
                     {"role": "assistant", "content": message},
                 )

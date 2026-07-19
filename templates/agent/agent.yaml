@@ -1,15 +1,37 @@
+# Full agent configuration template.
+# Values shown here are examples. If .agenthost/default_agent.yaml exists at the
+# project root, it is loaded first and then deep-merged with this file; any
+# value here overrides the default.
+
 name: EXAMPLE_AGENT
 model: gpt-4o-mini
-host: 127.0.0.1
-port: 8000
+host: 127.0.0.1          # 127.0.0.1 = local only; 0.0.0.0 = accessible from network
+port: 8000              # Optional: pin a specific port (auto-assigned if omitted)
 temperature: 0.3
-frequency_penalty: 0.7
-presence_penalty: 0.6
-max_tokens: null
-max_memory_tokens: 10000
-base_url: null
-thinking: null
+base_url: https://api.openai.com/v1
+max_tokens: null        # Optional: cap LLM output tokens
+frequency_penalty: 0.0  # Optional: penalize repeated tokens (-2.0 to 2.0)
+presence_penalty: 0.0   # Optional: penalize repeated topics (-2.0 to 2.0)
+thinking: null          # Optional: reasoning effort for supported models (e.g., high)
 orchestrator: false
+
+embedding:
+  model: BAAI/bge-m3
+  # base_url defaults to the agent's base_url if omitted.
+  # base_url: https://api.openai.com/v1
+
+memory:
+  mode: rag
+  recent_messages: 8    # Number of recent messages kept verbatim
+  chunk_size: 512       # Target token size per RAG chunk
+  budget_tokens: 6000   # Token budget for retrieved RAG chunks
+  max_chunks: 12        # Hard cap on retrieved chunks
+  max_pool_chunks: 5000 # Most recent embeddings considered for RAG scoring
+  similarity_weight: 0.6 # Weight for semantic similarity in ranking
+  recency_weight: 0.3   # Weight for recency in ranking
+  role_weight: 0.1      # Weight for message-role importance in ranking
+  mmr_lambda: 0.7       # MMR balance between relevance and diversity
+
 extra:
   # Add any agent-specific configuration here. Tools can read these values
   # through the current agent config at runtime.

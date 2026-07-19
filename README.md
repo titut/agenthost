@@ -417,8 +417,23 @@ max_tokens: 2048         # Optional: cap LLM output tokens
 frequency_penalty: 0.0   # Optional: penalize repeated tokens (-2.0 to 2.0)
 presence_penalty: 0.0    # Optional: penalize repeated topics (-2.0 to 2.0)
 thinking: high           # Optional: reasoning effort for supported models
-max_memory_tokens: 25000 # Memory budget for conversation history (estimated tokens)
 port: 8000               # Optional: pin a specific port
+
+embedding:
+  model: BAAI/bge-m3     # Embedding model used for memory RAG
+  # base_url: https://api.openai.com/v1  # Defaults to the agent's base_url
+
+memory:
+  mode: rag
+  recent_messages: 8    # Number of recent messages kept verbatim
+  chunk_size: 512       # Tokens per RAG chunk
+  budget_tokens: 6000   # Token budget for retrieved RAG chunks
+  max_chunks: 12        # Hard cap on retrieved chunks
+  max_pool_chunks: 5000 # Most recent embeddings considered for RAG
+  similarity_weight: 0.6 # Weight for semantic similarity in ranking
+  recency_weight: 0.3    # Weight for recency in ranking
+  role_weight: 0.1       # Weight for message-role importance in ranking
+  mmr_lambda: 0.7       # MMR balance between relevance and diversity
 ```
 
 | Field               | Default              | Description                                        |
@@ -432,17 +447,38 @@ port: 8000               # Optional: pin a specific port
 | `frequency_penalty` | `None`               | Penalize repeated tokens (-2.0 to 2.0)             |
 | `presence_penalty`  | `None`               | Penalize repeated topics (-2.0 to 2.0)             |
 | `thinking`          | `None`               | Reasoning effort for supported models (e.g., `high`) |
-| `max_memory_tokens` | `25000`              | Estimated-token budget for loaded conversation history |
-| `max_memory_turns`  | `0`                  | Hard cap on number of messages kept (0 = unlimited)    |
+| `embedding`         | `BAAI/bge-m3`        | Embedding model config for memory RAG              |
+| `memory`            | See below            | Hybrid memory configuration (recent + RAG)         |
 | `port`              | `auto`               | Explicit TCP port (auto-assigned from 8000 if omitted) |
 
 Any extra fields in `agent.yaml` are stored in `config.extra` and can be read by custom tool code.
+
+### Default Agent Configuration
+
+You can place shared defaults in `.agenthost/default_agent.yaml` at the project root. `AgentConfig.from_path` loads this file before the agent’s own `agent.yaml` and deep-merges them, so nested blocks like `embedding:` and `memory:` are merged rather than replaced. Values in the agent’s `agent.yaml` always override the defaults.
+
+This is useful when many agents share the same provider, embedding model, and memory settings. Individual `agent.yaml` files then only need to specify what differs, such as `name`, `model`, and `temperature`.
+
+```yaml
+# .agenthost/default_agent.yaml
+host: 127.0.0.1
+base_url: https://api.deepinfra.com/v1/openai
+embedding:
+  model: BAAI/bge-m3
+memory:
+  mode: rag
+  recent_messages: 8
+  chunk_size: 512
+  budget_tokens: 6000
+  max_chunks: 12
+  max_pool_chunks: 5000
+```
 
 ---
 
 ## Memory System
 
-Each agent gets an auto-created SQLite database at `memory/memory.db` with two tables:
+Each agent gets an auto-created SQLite database at `memory/memory.db` with three tables:
 
 ### `messages` — Conversation History
 
@@ -457,7 +493,41 @@ Each agent gets an auto-created SQLite database at `memory/memory.db` with two t
 | `name`        | TEXT    | Tool name (for tool role messages)            |
 | `created_at`  | DATETIME| Auto-set timestamp                            |
 
-Messages are automatically trimmed by estimated tokens. The agent loads only the most recent suffix of the conversation that fits within `max_memory_tokens` (default `25000`), walking backward from the latest message and cutting only at user-message boundaries so assistant tool-call groups stay intact. If `max_memory_turns` is set, it acts as a hard message-count cap on top of the token budget.
+### `embeddings` — RAG Index
+
+| Column         | Type    | Purpose                                    |
+|----------------|---------|--------------------------------------------|
+| `id`           | INTEGER | Auto-incrementing primary key              |
+| `message_id`   | INTEGER | Foreign key to `messages`                  |
+| `thread_id`    | TEXT    | Conversation thread identifier             |
+| `chunk_index`  | INTEGER | Position within the source message         |
+| `role`         | TEXT    | Source message role                        |
+| `chunk_text`   | TEXT    | Chunk text used for retrieval              |
+| `embedding`    | TEXT    | JSON-serialized embedding vector           |
+| `created_at`   | DATETIME| Source message timestamp                   |
+
+### Hybrid Memory
+
+The memory system keeps the most recent `memory.recent_messages` messages verbatim and retrieves relevant older context via RAG. Each message is chunked, embedded with the configured `embedding.model`, and stored in the `embeddings` table. At query time, the agent embeds the current user message and retrieves chunks ranked by a combination of semantic similarity, recency, and role importance. Maximal Marginal Relevance (MMR) is applied to keep the selected chunks diverse.
+
+Retrieved chunks are inserted into the prompt as a system message before the recent conversation, so the model sees both the immediate context and relevant historical context. The `memory.budget_tokens` and `memory.max_chunks` settings cap the RAG portion.
+
+### Memory configuration
+
+| Field | Default | Description |
+|---|---|---|
+| `mode` | `rag` | Memory mode (`rag` only after migration) |
+| `recent_messages` | `8` | Recent messages kept verbatim in the prompt |
+| `chunk_size` | `512` | Target token size per RAG chunk |
+| `budget_tokens` | `6000` | Token budget for the RAG chunks actually inserted |
+| `max_chunks` | `12` | Hard cap on RAG chunks returned |
+| `max_pool_chunks` | `5000` | Most recent embeddings loaded and scored for each query |
+| `similarity_weight` | `0.6` | Weight for semantic similarity in ranking |
+| `recency_weight` | `0.3` | Weight for recency in ranking |
+| `role_weight` | `0.1` | Weight for message-role importance in ranking |
+| `mmr_lambda` | `0.7` | MMR balance between relevance and diversity |
+
+The `max_pool_chunks` setting bounds how many embeddings are loaded from SQLite per query, keeping retrieval fast even for very long threads.
 
 ### `kv` — Key/Value Store
 

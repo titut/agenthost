@@ -1,11 +1,6 @@
 name: TODO
-model: deepseek-ai/DeepSeek-V4-Flash
-base_url: https://api.deepinfra.com/v1/openai
-host: 127.0.0.1
+model: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
 temperature: 0.3
 frequency_penalty: 0.7
 presence_penalty: 0.6
 thinking: medium
-max_memory_tokens: 5000
-max_tokens: 1500
-orchestrator: false

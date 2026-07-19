@@ -1,22 +1,37 @@
-"""SQLite-backed memory for an agent."""
+"""SQLite-backed memory for an agent with RAG retrieval."""
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
-from agenthost.config import AgentConfig, _estimate_tokens
+from agenthost.config import _estimate_tokens
+
+if TYPE_CHECKING:
+    from agenthost.config import AgentConfig
+    from agenthost.embeddings import EmbeddingClient
 
 
 class AgentMemory:
-    """Simple SQLite-backed memory: conversation history + key/value store."""
+    """SQLite-backed memory: conversation history + embeddings + key/value store.
 
-    def __init__(self, config: AgentConfig):
+    Recent messages are kept verbatim. Older messages are chunked, embedded, and
+    stored for semantic retrieval, so the agent can recall relevant context
+    beyond the recent-message window.
+    """
+
+    def __init__(
+        self,
+        config: AgentConfig,
+        embedding_client: EmbeddingClient | None = None,
+    ):
         self.config = config
+        self.embedding_client = embedding_client
         config.memory_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = config.memory_dir / "memory.db"
         self._init_db()
@@ -47,6 +62,21 @@ class AgentMemory:
                 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
                 CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
 
+                CREATE TABLE IF NOT EXISTS embeddings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    message_index INTEGER NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    role TEXT,
+                    chunk_text TEXT,
+                    embedding TEXT,
+                    created_at DATETIME,
+                    FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_embeddings_thread ON embeddings(thread_id);
+                CREATE INDEX IF NOT EXISTS idx_embeddings_message ON embeddings(message_id);
+
                 CREATE TABLE IF NOT EXISTS kv (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
@@ -59,14 +89,18 @@ class AgentMemory:
     def get_messages(self, thread_id: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT role, content, tool_calls, tool_call_id, name, created_at FROM messages "
+                "SELECT id, role, content, tool_calls, tool_call_id, name, created_at FROM messages "
                 "WHERE thread_id = ? ORDER BY id",
                 (thread_id,),
             ).fetchall()
 
         messages: list[dict[str, Any]] = []
         for row in rows:
-            msg: dict[str, Any] = {"role": row["role"], "created_at": row["created_at"]}
+            msg: dict[str, Any] = {
+                "id": row["id"],
+                "role": row["role"],
+                "created_at": row["created_at"],
+            }
             if row["tool_calls"]:
                 msg["tool_calls"] = json.loads(row["tool_calls"])
             if row["tool_call_id"]:
@@ -104,10 +138,6 @@ class AgentMemory:
         ids_to_delete: set[int] = set()
         ids_to_strip_tool_calls: set[int] = set()
 
-        # Pass 1: identify corrupted assistant tool_calls (no valid IDs) so we
-        # can strip the tool_calls and delete their following tool rows. Keep
-        # the assistant content. Valid dangling tool_calls are preserved;
-        # _normalize_messages will synthesize missing responses.
         i = 0
         while i < len(rows):
             row = rows[i]
@@ -124,24 +154,17 @@ class AgentMemory:
             following_tool_rows = rows[i + 1 : j]
 
             if not expected_ids:
-                # Tool calls without IDs cannot be reliably matched to tool
-                # responses. Strip the tool_calls from the assistant message and
-                # delete any following tool messages.
                 ids_to_strip_tool_calls.add(row["id"])
                 for tool_row in following_tool_rows:
                     ids_to_delete.add(tool_row["id"])
 
             i = j
 
-        # Pass 2: remove orphaned tool messages whose tool_call_id is not declared
-        # by any preceding assistant message.
         declared_tool_call_ids: set[str] = set()
         for row in rows:
             if row["id"] in ids_to_delete:
                 continue
             if row["role"] == "assistant" and row["tool_calls"]:
-                # Skip rows whose tool_calls will be stripped; they no longer
-                # declare tool_call_ids.
                 if row["id"] in ids_to_strip_tool_calls:
                     continue
                 tool_calls = json.loads(row["tool_calls"])
@@ -173,11 +196,20 @@ class AgentMemory:
             conn.commit()
         return modified_count
 
-    def append_message(self, thread_id: str, message: dict[str, Any]) -> None:
-        tool_calls = json.dumps(message.get("tool_calls")) if message.get("tool_calls") else None
+    async def append_message(self, thread_id: str, message: dict[str, Any]) -> None:
+        """Store a message and its embedding chunks.
+
+        Embeddings are generated asynchronously via the configured embedding
+        client. If the client is unavailable, the message is still stored so the
+        conversation can continue, but it will not be retrievable via RAG.
+        """
+        tool_calls = (
+            json.dumps(message.get("tool_calls")) if message.get("tool_calls") else None
+        )
         created_at = message.get("created_at") or datetime.now(timezone.utc).isoformat()
+
         with self._connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 "INSERT INTO messages (thread_id, role, content, tool_calls, tool_call_id, name, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -190,86 +222,276 @@ class AgentMemory:
                     created_at,
                 ),
             )
+            message_id = cursor.lastrowid
             conn.commit()
-        self._trim_messages(thread_id)
 
-    def _trim_messages(self, thread_id: str) -> None:
-        """Keep only the most recent messages that fit the memory budget.
+        await self._embed_and_store_message(
+            thread_id, message_id, message, created_at
+        )
 
-        The primary budget is ``max_memory_tokens``. When it is set, messages are
-        removed from the oldest end until the remaining suffix fits within the
-        token budget. Cuts only happen at user-message boundaries so tool-call
-        groups stay intact.
-
-        If ``max_memory_turns`` is also set, it acts as a secondary cap on the
-        number of messages kept.
-        """
-        max_tokens = self.config.max_memory_tokens
-        max_turns = self.config.max_memory_turns
-        if max_tokens <= 0 and max_turns <= 0:
+    async def _embed_and_store_message(
+        self,
+        thread_id: str,
+        message_id: int,
+        message: dict[str, Any],
+        created_at: str,
+    ) -> None:
+        """Chunk a message, embed the chunks, and store them."""
+        if self.embedding_client is None:
             return
 
+        text = _message_to_text(message)
+        if not text.strip():
+            return
+
+        chunk_size = self.config.memory.chunk_size
+        overlap = chunk_size // 4
+        chunks = _chunk_text(text, chunk_size, overlap)
+        if not chunks:
+            return
+
+        result = await self.embedding_client.embed(chunks)
+        if "error" in result:
+            return
+
+        embeddings = result.get("embeddings", [])
+        if len(embeddings) != len(chunks):
+            return
+
+        message_index = self._message_index(thread_id, message_id)
+
+        with self._connect() as conn:
+            for chunk_index, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+                conn.execute(
+                    "INSERT INTO embeddings "
+                    "(message_id, thread_id, message_index, chunk_index, role, chunk_text, embedding, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        message_id,
+                        thread_id,
+                        message_index,
+                        chunk_index,
+                        message.get("role"),
+                        chunk_text,
+                        json.dumps(embedding, default=float),
+                        created_at,
+                    ),
+                )
+            conn.commit()
+
+    def _message_index(self, thread_id: str, message_id: int) -> int:
+        """Return the 0-based index of a message in its thread."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE thread_id = ? AND id < ?",
+                (thread_id, message_id),
+            ).fetchone()
+        return row[0] if row else 0
+
+    async def rewrite_thread(
+        self, thread_id: str, messages: list[dict[str, Any]]
+    ) -> None:
+        """Replace all messages for a thread and regenerate embeddings."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
+            conn.commit()
+
+        for msg in messages:
+            await self.append_message(thread_id, msg)
+
+    async def retrieve_relevant_chunks(
+        self,
+        thread_id: str,
+        query_text: str,
+        exclude_message_ids: set[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return RAG chunks relevant to the query, ranked and diversified.
+
+        The ranking combines semantic similarity, recency, and a small role
+        weight. Maximal Marginal Relevance (MMR) is then applied to balance
+        relevance with diversity.
+
+        Results are limited by both ``memory.max_chunks`` and
+        ``memory.budget_tokens``.
+        """
+        if self.embedding_client is None:
+            return []
+
+        query_result = await self.embedding_client.embed_query(query_text)
+        if "error" in query_result:
+            return []
+        query_embedding = query_result.get("embedding")
+        if query_embedding is None:
+            return []
+
+        candidates = self._load_candidates(thread_id, exclude_message_ids)
+        if not candidates:
+            return []
+
+        total_messages = self._message_count(thread_id)
+        scored = self._score_candidates(
+            candidates, query_embedding, total_messages
+        )
+        selected = self._mmr_select(
+            scored, self.config.memory.max_chunks, self.config.memory.mmr_lambda
+        )
+
+        # Trim by token budget while preserving MMR order.
+        selected = self._trim_by_token_budget(selected)
+        return selected
+
+    def _load_candidates(
+        self,
+        thread_id: str,
+        exclude_message_ids: set[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Load the most recent embeddable chunks for a thread, capped by config.
+
+        Only the ``memory.max_pool_chunks`` most recent embeddings are loaded
+        so retrieval latency stays bounded for very long threads.
+        """
+        exclude = exclude_message_ids or set()
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, role, content, tool_calls, tool_call_id, name FROM messages "
-                "WHERE thread_id = ? ORDER BY id",
-                (thread_id,),
+                "SELECT id, message_id, message_index, chunk_index, role, chunk_text, embedding, created_at "
+                "FROM embeddings WHERE thread_id = ? ORDER BY created_at DESC LIMIT ?",
+                (thread_id, self.config.memory.max_pool_chunks),
             ).fetchall()
 
-        if not rows:
-            return
-
-        # Build lightweight message dicts for token estimation.
-        messages: list[dict[str, Any]] = []
+        candidates: list[dict[str, Any]] = []
         for row in rows:
-            msg: dict[str, Any] = {"role": row["role"]}
-            if row["tool_calls"]:
-                msg["tool_calls"] = json.loads(row["tool_calls"])
-            if row["tool_call_id"]:
-                msg["tool_call_id"] = row["tool_call_id"]
-            if row["name"]:
-                msg["name"] = row["name"]
-            if row["content"]:
-                msg["content"] = row["content"]
-            messages.append(msg)
-
-        n = len(messages)
-        token_counts = [_estimate_tokens([msg], self.config.model) for msg in messages]
-        prefix = [0]
-        for count in token_counts:
-            prefix.append(prefix[-1] + count)
-
-        # Turn-based cut index.
-        turn_cut = 0
-        if max_turns > 0:
-            turn_cut = max(0, n - max_turns)
-
-        token_cut = n
-        if max_tokens > 0:
-            for i in range(n - 1, -1, -1):
-                if messages[i].get("role") != "user":
-                    continue
-                suffix_tokens = prefix[n] - prefix[i]
-                if suffix_tokens <= max_tokens:
-                    token_cut = i
-            if token_cut == n:
-                for i in range(n - 1, -1, -1):
-                    if messages[i].get("role") == "user":
-                        token_cut = i
-                        break
-
-        cut = max(turn_cut, token_cut)
-        if cut <= 0:
-            return
-
-        ids_to_delete = [row["id"] for row in rows[:cut]]
-        with self._connect() as conn:
-            placeholders = ",".join("?" * len(ids_to_delete))
-            conn.execute(
-                f"DELETE FROM messages WHERE id IN ({placeholders})",
-                tuple(ids_to_delete),
+            if row["message_id"] in exclude:
+                continue
+            try:
+                embedding = json.loads(row["embedding"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            candidates.append(
+                {
+                    "id": row["id"],
+                    "message_id": row["message_id"],
+                    "message_index": row["message_index"],
+                    "chunk_index": row["chunk_index"],
+                    "role": row["role"],
+                    "chunk_text": row["chunk_text"],
+                    "embedding": embedding,
+                    "created_at": row["created_at"],
+                }
             )
-            conn.commit()
+        return candidates
+
+    def _message_count(self, thread_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+        return row[0] if row else 0
+
+    def _score_candidates(
+        self,
+        candidates: list[dict[str, Any]],
+        query_embedding: list[float],
+        total_messages: int,
+    ) -> list[dict[str, Any]]:
+        """Score chunks by similarity, recency, and role."""
+        cfg = self.config.memory
+        total_messages = max(total_messages, 1)
+
+        # Recency is derived from created_at timestamps, which is robust against
+        # deleted or repaired messages. Normalize to [0, 1].
+        timestamps: list[float] = []
+        for cand in candidates:
+            try:
+                timestamps.append(datetime.fromisoformat(cand["created_at"]).timestamp())
+            except (ValueError, TypeError):
+                timestamps.append(0.0)
+
+        min_ts = min(timestamps) if timestamps else 0.0
+        max_ts = max(timestamps) if timestamps else 0.0
+        ts_range = max_ts - min_ts if max_ts > min_ts else 1.0
+
+        scored: list[dict[str, Any]] = []
+        for cand, ts in zip(candidates, timestamps):
+            similarity = _cosine_similarity(query_embedding, cand["embedding"])
+            recency = (ts - min_ts) / ts_range
+            role_weight = _role_weight(cand["role"])
+
+            score = (
+                cfg.similarity_weight * similarity
+                + cfg.recency_weight * recency
+                + cfg.role_weight * role_weight
+            )
+            scored.append(
+                {
+                    **cand,
+                    "similarity": similarity,
+                    "recency": recency,
+                    "role_weight": role_weight,
+                    "score": score,
+                }
+            )
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored
+
+    def _mmr_select(
+        self,
+        scored: list[dict[str, Any]],
+        max_results: int,
+        lambda_param: float,
+    ) -> list[dict[str, Any]]:
+        """Select diverse chunks using Maximal Marginal Relevance."""
+        if not scored:
+            return []
+        if len(scored) <= max_results:
+            return scored
+
+        selected: list[dict[str, Any]] = []
+        remaining = list(scored)
+
+        while remaining and len(selected) < max_results:
+            best_idx = 0
+            best_mmr_score = -1.0
+            for i, cand in enumerate(remaining):
+                if not selected:
+                    mmr_score = cand["score"]
+                else:
+                    max_sim = max(
+                        _cosine_similarity(cand["embedding"], s["embedding"])
+                        for s in selected
+                    )
+                    mmr_score = (
+                        lambda_param * cand["score"]
+                        - (1 - lambda_param) * max_sim
+                    )
+                if mmr_score > best_mmr_score:
+                    best_mmr_score = mmr_score
+                    best_idx = i
+
+            selected.append(remaining.pop(best_idx))
+
+        return selected
+
+    def _trim_by_token_budget(
+        self, selected: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Return the prefix of selected chunks that fits within the RAG budget."""
+        budget = self.config.memory.budget_tokens
+        if budget <= 0:
+            return selected
+
+        total = 0
+        trimmed: list[dict[str, Any]] = []
+        for chunk in selected:
+            estimated = _estimate_tokens(
+                [{"role": "system", "content": chunk["chunk_text"]}],
+                self.config.model,
+            )
+            if total + estimated > budget and trimmed:
+                break
+            total += estimated
+            trimmed.append(chunk)
+        return trimmed
 
     def get(self, key: str, default: Any = None) -> Any:
         with self._connect() as conn:
@@ -294,34 +516,13 @@ class AgentMemory:
         """Remove all conversation history. Called on serve to start fresh."""
         with self._connect() as conn:
             conn.execute("DELETE FROM messages")
+            conn.execute("DELETE FROM embeddings")
             conn.commit()
 
     def clear_thread(self, thread_id: str) -> None:
-        """Remove all messages for a specific thread."""
+        """Remove all messages and embeddings for a specific thread."""
         with self._connect() as conn:
             conn.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
-            conn.commit()
-
-    def rewrite_thread(self, thread_id: str, messages: list[dict[str, Any]]) -> None:
-        """Replace all messages for a specific thread with the given list."""
-        with self._connect() as conn:
-            conn.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
-            for msg in messages:
-                tool_calls = json.dumps(msg.get("tool_calls")) if msg.get("tool_calls") else None
-                created_at = msg.get("created_at") or datetime.now(timezone.utc).isoformat()
-                conn.execute(
-                    "INSERT INTO messages (thread_id, role, content, tool_calls, tool_call_id, name, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        thread_id,
-                        msg["role"],
-                        msg.get("content"),
-                        tool_calls,
-                        msg.get("tool_call_id"),
-                        msg.get("name"),
-                        created_at,
-                    ),
-                )
             conn.commit()
 
     def list_threads(self) -> list[dict[str, Any]]:
@@ -351,3 +552,92 @@ class AgentMemory:
                 }
             )
         return threads
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _message_to_text(message: dict[str, Any]) -> str:
+    """Convert a stored message into a single embeddable text."""
+    role = message.get("role", "unknown")
+    content = message.get("content") or ""
+    if role == "tool":
+        name = message.get("name") or "tool"
+        return f"[{role}] {name}: {content}"
+    if role == "assistant" and message.get("tool_calls"):
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list):
+            calls = " ".join(
+                f"{tc.get('function', {}).get('name', 'unknown')}({tc.get('function', {}).get('arguments', '')})"
+                for tc in tool_calls
+            )
+            return f"[{role}] {content} {calls}".strip()
+    return f"[{role}] {content}"
+
+
+def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
+    """Split text into overlapping chunks by tokens (best-effort).
+
+    Uses tiktoken when available, otherwise falls back to a character heuristic.
+    """
+    if not text:
+        return []
+
+    try:
+        import tiktoken
+
+        encoding = tiktoken.get_encoding("cl100k_base")
+        tokens = encoding.encode(text)
+        if len(tokens) <= chunk_size:
+            return [encoding.decode(tokens)]
+
+        chunks: list[str] = []
+        step = max(chunk_size - overlap, 1)
+        start = 0
+        while start < len(tokens):
+            end = min(start + chunk_size, len(tokens))
+            chunks.append(encoding.decode(tokens[start:end]))
+            if end >= len(tokens):
+                break
+            start += step
+        return chunks
+    except Exception:
+        # Fallback: approximate tokens with 4 characters per token.
+        char_size = chunk_size * 4
+        char_overlap = overlap * 4
+        if len(text) <= char_size:
+            return [text]
+
+        chunks: list[str] = []
+        step = max(char_size - char_overlap, 1)
+        start = 0
+        while start < len(text):
+            end = min(start + char_size, len(text))
+            chunks.append(text[start:end])
+            if end >= len(text):
+                break
+            start += step
+        return chunks
+
+
+def _role_weight(role: str | None) -> float:
+    """Return a small weight boost based on message role."""
+    if role == "user":
+        return 1.05
+    if role == "assistant":
+        return 1.0
+    if role == "tool":
+        return 0.95
+    return 1.0
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Return cosine similarity between two vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)

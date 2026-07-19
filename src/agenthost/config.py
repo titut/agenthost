@@ -3,6 +3,7 @@
 Philosophy: everything needed to run the agent lives in the agent folder.
 The only exception is secrets (e.g. OPENAI_API_KEY), which are read from the environment.
 """
+
 from __future__ import annotations
 
 import ast
@@ -18,18 +19,38 @@ from agenthost.home import get_agenthost_home
 from agenthost.skills import load_skills
 
 
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge override into base. Nested dicts are merged, not replaced."""
+    result = dict(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _find_default_agent_config(agent_path: Path) -> Path | None:
+    """Locate .agenthost/default_agent.yaml by walking up from the agent path."""
+    current = agent_path.resolve()
+    while current != current.parent:
+        candidate = current / ".agenthost" / "default_agent.yaml"
+        if candidate.exists():
+            return candidate
+        current = current.parent
+    return None
+
+
 DEFAULT_CONFIG = {
-    "model": "gpt-4o-mini",
+    "model": "moonshotai/Kimi-K2.5",
     "host": "127.0.0.1",
     "temperature": 0.7,
-    "max_memory_turns": 0,
-    "max_memory_tokens": 25000,
-    "base_url": None,
-    "max_tokens": None,
-    "thinking": None,
+    "base_url": "https://api.deepinfra.com/v1ai",
+    "max_tokens": 12000,
+    "thinking": "low",
     "orchestrator": False,
-    "frequency_penalty": None,
-    "presence_penalty": None,
+    "frequency_penalty": 0.7,
+    "presence_penalty": 0.7,
 }
 
 
@@ -59,6 +80,30 @@ def _estimate_tokens(messages: list[dict[str, Any]], model: str) -> int:
 
 
 @dataclass
+class EmbeddingConfig:
+    """Embedding provider used for memory RAG."""
+
+    model: str = "BAAI/bge-m3"
+    base_url: str | None = "https://api.deepinfra.com/v1ai"
+
+
+@dataclass
+class MemoryConfig:
+    """Hybrid memory configuration: recent messages + RAG chunks."""
+
+    mode: str = "rag"
+    recent_messages: int = 8
+    chunk_size: int = 512
+    budget_tokens: int = 6000
+    max_chunks: int = 12
+    max_pool_chunks: int = 5000
+    similarity_weight: float = 0.6
+    recency_weight: float = 0.3
+    role_weight: float = 0.1
+    mmr_lambda: float = 0.7
+
+
+@dataclass
 class AgentConfig:
     path: Path
     name: str
@@ -66,14 +111,14 @@ class AgentConfig:
     host: str = DEFAULT_CONFIG["host"]
     port: int | None = None
     temperature: float = DEFAULT_CONFIG["temperature"]
-    max_memory_turns: int = DEFAULT_CONFIG["max_memory_turns"]
-    max_memory_tokens: int = DEFAULT_CONFIG["max_memory_tokens"]
     base_url: str | None = DEFAULT_CONFIG["base_url"]
     max_tokens: int | None = DEFAULT_CONFIG["max_tokens"]
     thinking: str | None = DEFAULT_CONFIG["thinking"]
     frequency_penalty: float | None = DEFAULT_CONFIG["frequency_penalty"]
     presence_penalty: float | None = DEFAULT_CONFIG["presence_penalty"]
     orchestrator: bool = DEFAULT_CONFIG["orchestrator"]
+    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -284,11 +329,16 @@ class AgentConfig:
                     pass
 
             if tools:
-                tool_parts = [f"`{name}`" + (f" — {desc}" if desc else "") for name, desc in tools]
+                tool_parts = [
+                    f"`{name}`" + (f" — {desc}" if desc else "") for name, desc in tools
+                ]
                 entry_lines.append("  - Tools: " + ", ".join(tool_parts))
 
             if skills:
-                skill_parts = [f"`{name}`" + (f" — {desc}" if desc else "") for name, desc in skills]
+                skill_parts = [
+                    f"`{name}`" + (f" — {desc}" if desc else "")
+                    for name, desc in skills
+                ]
                 entry_lines.append("  - Skills: " + ", ".join(skill_parts))
 
             entries.append("\n".join(entry_lines))
@@ -312,19 +362,76 @@ class AgentConfig:
             raise ValueError(f"Agent package missing WHOAMI.md: {p}")
 
         config = dict(DEFAULT_CONFIG)
+
+        # Load project-wide defaults from .agenthost/default_agent.yaml if found.
+        default_config_path = _find_default_agent_config(p)
+        if default_config_path is not None:
+            loaded_default = (
+                yaml.safe_load(default_config_path.read_text(encoding="utf-8")) or {}
+            )
+            config = _deep_merge(config, loaded_default)
+
+        # Load agent-specific overrides.
         config_path = p / "agent.yaml"
         if config_path.exists():
             loaded = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-            config.update(loaded)
+            config = _deep_merge(config, loaded)
 
         name = config.pop("name", p.name)
+
+        # Parse nested embedding/memory config blocks. Embedding base_url defaults
+        # to the agent's base_url so the same provider can be used out of the box.
+        embedding_cfg = config.pop("embedding", None) or {}
+        embedding = EmbeddingConfig(
+            model=embedding_cfg.get("model", EmbeddingConfig().model),
+            base_url=embedding_cfg.get("base_url", config.get("base_url")),
+        )
+
+        memory_cfg = config.pop("memory", None) or {}
+        memory = MemoryConfig(
+            mode=memory_cfg.get("mode", MemoryConfig().mode),
+            recent_messages=int(
+                memory_cfg.get("recent_messages", MemoryConfig().recent_messages)
+            ),
+            chunk_size=int(memory_cfg.get("chunk_size", MemoryConfig().chunk_size)),
+            budget_tokens=int(
+                memory_cfg.get("budget_tokens", MemoryConfig().budget_tokens)
+            ),
+            max_chunks=int(memory_cfg.get("max_chunks", MemoryConfig().max_chunks)),
+            max_pool_chunks=int(
+                memory_cfg.get("max_pool_chunks", MemoryConfig().max_pool_chunks)
+            ),
+            similarity_weight=float(
+                memory_cfg.get("similarity_weight", MemoryConfig().similarity_weight)
+            ),
+            recency_weight=float(
+                memory_cfg.get("recency_weight", MemoryConfig().recency_weight)
+            ),
+            role_weight=float(
+                memory_cfg.get("role_weight", MemoryConfig().role_weight)
+            ),
+            mmr_lambda=float(memory_cfg.get("mmr_lambda", MemoryConfig().mmr_lambda)),
+        )
+
         # The 'extra' block in agent.yaml is merged into the extra dict.
         explicit_extra = config.pop("extra", None) or {}
-        extra = {k: v for k, v in config.items() if k not in {
-            "model", "host", "port", "temperature", "max_memory_turns", "max_memory_tokens",
-            "base_url", "max_tokens", "thinking", "frequency_penalty", "presence_penalty",
-            "orchestrator",
-        }}
+        extra = {
+            k: v
+            for k, v in config.items()
+            if k
+            not in {
+                "model",
+                "host",
+                "port",
+                "temperature",
+                "base_url",
+                "max_tokens",
+                "thinking",
+                "frequency_penalty",
+                "presence_penalty",
+                "orchestrator",
+            }
+        }
         extra.update(explicit_extra)
 
         # Port is now optional in config; keep backward compat with explicit values.
@@ -344,13 +451,17 @@ class AgentConfig:
             host=config.get("host"),
             port=port,
             temperature=float(config.get("temperature")),
-            max_memory_turns=int(config.get("max_memory_turns")),
-            max_memory_tokens=int(config.get("max_memory_tokens")),
             base_url=config.get("base_url"),
             max_tokens=int(max_tokens) if max_tokens is not None else None,
             thinking=str(thinking) if thinking is not None else None,
-            frequency_penalty=float(frequency_penalty) if frequency_penalty is not None else None,
-            presence_penalty=float(presence_penalty) if presence_penalty is not None else None,
+            frequency_penalty=(
+                float(frequency_penalty) if frequency_penalty is not None else None
+            ),
+            presence_penalty=(
+                float(presence_penalty) if presence_penalty is not None else None
+            ),
             orchestrator=orchestrator,
+            embedding=embedding,
+            memory=memory,
             extra=extra,
         )
