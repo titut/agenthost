@@ -7,5 +7,5 @@ orchestrator: true
 thinking: medium
 
 extra:
-  builtin_tools: [events, discord, read_file]
+  builtin_tools: [events, discord, read_file, skill_crud]
   discord_bridge_url: http://127.0.0.1:9002/send

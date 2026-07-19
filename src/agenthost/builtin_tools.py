@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +36,45 @@ if False:
 
 
 logger = setup_logging("agenthost.builtin_tools")
+
+
+def _is_valid_skill_name(name: str) -> bool:
+    """Return True if name is a safe skill file stem."""
+    if not name or len(name) > 100:
+        return False
+    return bool(re.fullmatch(r"[a-zA-Z0-9_-]+", name))
+
+
+def _has_description_section(content: str) -> bool:
+    """Return True if the markdown contains a '# Description' section."""
+    for line in content.splitlines():
+        if line.strip().lower() in ("# description", "## description"):
+            return True
+    return False
+
+
+def _backup_skill(path: Path) -> Path:
+    """Back up an existing skill file before overwriting or deleting it."""
+    backup_path = path.with_suffix(".md.bak")
+    if backup_path.exists():
+        backup_path.unlink()
+    path.rename(backup_path)
+    return backup_path
+
+
+def _normalize_string_or_list(value: str | list[str] | None) -> list[str] | None:
+    """Normalize a string argument to a list, or return a list as-is."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return value
+    text = value.strip()
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+    return [item.strip() for item in text.split(",") if item.strip()]
 
 
 class EventTools:
@@ -123,9 +163,9 @@ class EventTools:
     def add_event(
         self,
         name: str,
-        schedule_type: str,
+        schedule_type: list[str],
         prompt: str,
-        time: str | None = None,
+        time: list[str] | None = None,
         every: int | None = None,
         unit: str | None = None,
         at: str | None = None,
@@ -135,9 +175,12 @@ class EventTools:
 
         Args:
             name: Unique name for the event.
-            schedule_type: One of daily, weekdays, weekends, monday-sunday, interval, once.
+            schedule_type: List of schedule types. Each one of: daily, weekdays,
+                weekends, monday-sunday, interval, once. For multiple days, pass
+                e.g. ['monday', 'wednesday'].
             prompt: Message/prompt sent to the agent when the event fires.
-            time: Required for day-based schedules, e.g. "09:00".
+            time: List of times in HH:MM or HH:MM:SS format. Required for day-based
+                schedules. For multiple times, pass e.g. ['09:00', '23:00'].
             every: Required for interval schedules.
             unit: Required for interval schedules: seconds, minutes, hours, days.
             at: Required for once schedules, ISO 8601 datetime.
@@ -172,15 +215,24 @@ class EventTools:
     def update_event(
         self,
         name: str,
-        schedule_type: str | None = None,
+        schedule_type: list[str] | None = None,
         prompt: str | None = None,
-        time: str | None = None,
+        time: list[str] | None = None,
         every: int | None = None,
         unit: str | None = None,
         at: str | None = None,
         enabled: bool | None = None,
     ) -> str:
-        """Update an existing scheduled event. Only provided fields are changed."""
+        """Update an existing scheduled event. Only provided fields are changed.
+
+        Args:
+            name: Name of the event to update.
+            schedule_type: List of schedule types. Each one of: daily, weekdays,
+                weekends, monday-sunday, interval, once. For multiple days, pass
+                e.g. ['monday', 'wednesday'].
+            time: List of times in HH:MM or HH:MM:SS format. For multiple times,
+                pass e.g. ['09:00', '23:00'].
+        """
         cfg = self._load()
         event = next((e for e in cfg.events if e.name == name), None)
         if event is None:
@@ -229,9 +281,9 @@ class EventTools:
         self,
         action: str,
         action_name: str | None = None,
-        schedule_type: str | None = None,
+        schedule_type: list[str] | None = None,
         prompt: str | None = None,
-        time: str | None = None,
+        time: list[str] | None = None,
         every: int | None = None,
         unit: str | None = None,
         at: str | None = None,
@@ -242,15 +294,20 @@ class EventTools:
         Args:
             action: One of "list", "add", "update", "delete".
             action_name: Name of the event. Required for add/update/delete.
-            schedule_type: One of daily, weekdays, weekends, monday-sunday, interval, once.
+            schedule_type: List of schedule types. Each one of: daily, weekdays,
+                weekends, monday-sunday, interval, once. For multiple days, pass
+                e.g. ['monday', 'wednesday'].
             prompt: Message/prompt sent to the agent when the event fires.
-            time: Required for day-based schedules, e.g. "09:00".
+            time: List of times in HH:MM or HH:MM:SS format. Required for day-based
+                schedules. For multiple times, pass e.g. ['09:00', '23:00'].
             every: Required for interval schedules.
             unit: Required for interval schedules: seconds, minutes, hours, days.
             at: Required for once schedules, ISO 8601 datetime.
             enabled: Whether the event is active.
         """
         action = action.lower().strip()
+        schedule_type = _normalize_string_or_list(schedule_type)
+        time = _normalize_string_or_list(time)
         if action == "list":
             return self.list_events()
         if action == "add":
@@ -287,7 +344,9 @@ class EventTools:
             if not action_name:
                 return json.dumps({"error": "action_name is required for delete"})
             return self.delete_event(name=action_name)
-        return json.dumps({"error": f"Unknown action '{action}'. Use list/add/update/delete."})
+        return json.dumps(
+            {"error": f"Unknown action '{action}'. Use list/add/update/delete."}
+        )
 
 
 class DateTimeTools:
@@ -296,15 +355,107 @@ class DateTimeTools:
     def get_current_datetime(self) -> str:
         """Return the current date and time in ISO 8601 format with timezone."""
         now = datetime.now(timezone.utc).astimezone()
-        return json.dumps({
-            "iso": now.isoformat(),
-            "utc": datetime.now(timezone.utc).isoformat(),
-            "local": now.strftime("%Y-%m-%d %H:%M:%S %Z"),
-            "date": now.strftime("%Y-%m-%d"),
-            "time": now.strftime("%H:%M:%S"),
-            "timezone": now.strftime("%Z"),
-            "offset": now.strftime("%z"),
-        })
+        return json.dumps(
+            {
+                "iso": now.isoformat(),
+                "utc": datetime.now(timezone.utc).isoformat(),
+                "local": now.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                "date": now.strftime("%Y-%m-%d"),
+                "time": now.strftime("%H:%M:%S"),
+                "timezone": now.strftime("%Z"),
+                "offset": now.strftime("%z"),
+            }
+        )
+
+
+class SkillTools:
+    """Tool for loading the full content of an agent skill on demand."""
+
+    def __init__(self, config: AgentConfig):
+        self.config = config
+
+    def get_skill(self, name: str) -> str:
+        """Return the full markdown content of a skill by name.
+
+        Use this when you need the detailed instructions for a skill listed in
+        the Available Skills section. The name must match the file stem shown in
+        the list (e.g. 'web-search').
+
+        Args:
+            name: The skill name, matching the file stem in the skills folder.
+        """
+        skill_path = self.config.skills_dir / f"{name}.md"
+        if not skill_path.exists():
+            return json.dumps({"error": f"Skill '{name}' not found"})
+        return json.dumps(
+            {
+                "name": name,
+                "content": skill_path.read_text(encoding="utf-8"),
+            }
+        )
+
+    def skill_crud(
+        self, action: str, name: str, content: str | None = None
+    ) -> str:
+        """Create, update, or delete a skill file.
+
+        Use this to manage the agent's own skills. Creating or updating a skill
+        requires a '# Description' section so it appears correctly in the
+        Available Skills list.
+
+        Args:
+            action: One of "create", "update", "delete".
+            name: The skill name, matching the file stem in the skills folder.
+            content: Full markdown content for the skill. Required for create and update.
+        """
+        action = action.lower().strip()
+        if action not in ("create", "update", "delete"):
+            return json.dumps(
+                {"error": f"Unknown action '{action}'. Use create/update/delete."}
+            )
+
+        if not _is_valid_skill_name(name):
+            return json.dumps(
+                {"error": f"Invalid skill name '{name}'. Use only letters, numbers, hyphens, and underscores."}
+            )
+
+        skill_path = self.config.skills_dir / f"{name}.md"
+
+        if action == "create":
+            if skill_path.exists():
+                return json.dumps(
+                    {"error": f"Skill '{name}' already exists. Use update to modify it."}
+                )
+            if content is None:
+                return json.dumps({"error": "content is required for create"})
+            if not _has_description_section(content):
+                return json.dumps(
+                    {"error": "Skill must contain a '# Description' section"}
+                )
+            self.config.skills_dir.mkdir(parents=True, exist_ok=True)
+            skill_path.write_text(content, encoding="utf-8")
+            return json.dumps({"status": "created", "name": name})
+
+        if action == "update":
+            if not skill_path.exists():
+                return json.dumps(
+                    {"error": f"Skill '{name}' not found. Use create to add it."}
+                )
+            if content is None:
+                return json.dumps({"error": "content is required for update"})
+            if not _has_description_section(content):
+                return json.dumps(
+                    {"error": "Skill must contain a '# Description' section"}
+                )
+            _backup_skill(skill_path)
+            skill_path.write_text(content, encoding="utf-8")
+            return json.dumps({"status": "updated", "name": name})
+
+        # action == "delete"
+        if not skill_path.exists():
+            return json.dumps({"error": f"Skill '{name}' not found"})
+        backup_path = _backup_skill(skill_path)
+        return json.dumps({"status": "deleted", "name": name, "backup": str(backup_path)})
 
 
 class ThreadTools:
@@ -439,13 +590,18 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
         "The current date and time are also included in the system prompt on every request, "
         "so you usually do not need this tool. Use it only when you need to confirm the exact "
         "current time in a structured format or when the system prompt timestamp seems "
-        "inconsistent with the user's question."
+        "inconsistent with the user's question.",
+        "- `get_skill(name)`: Return the full markdown content of a skill by name. "
+        "Use this when a task matches one of the skills listed in the Available Skills section. "
+        "The name must match the file stem shown in the list.",
     ]
     if "events" in enabled or "event_tool" in enabled:
         descriptions.append(
             "- `event_tool(action, action_name, schedule_type, prompt, time, every, unit, at, enabled)`: "
             "Manage scheduled events in this agent's events.yaml. "
             "Actions: list, add, update, delete. "
+            "schedule_type and time can be lists to create multiple triggers (e.g. "
+            "['monday', 'wednesday'] with ['09:00', '23:00']). "
             "Use this when the user asks to schedule, list, modify, or remove recurring tasks."
         )
     if "discord" in enabled or "send_discord" in enabled:
@@ -470,6 +626,13 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
     if "filesystem" in enabled or "list_uploads" in enabled:
         descriptions.append(
             "- `list_uploads()`: List files in the shared uploads directory, including extracted text sidecars."
+        )
+    if "skill_crud" in enabled:
+        descriptions.append(
+            "- `skill_crud(action, name, content='')`: Create, update, or delete skills in this agent's skills folder. "
+            "Actions: create, update, delete. "
+            "content is required for create and update and must include a '# Description' section. "
+            "Use this when the user asks to add, change, or remove one of the agent's skills."
         )
 
     if not descriptions:
@@ -500,21 +663,25 @@ def make_builtin_tools(
     # Build the full tool registry first.
     event_tools = EventTools(config, scheduler, agent_provider)
     datetime_tools = DateTimeTools()
+    skill_tools = SkillTools(config)
     discord_tools = DiscordTools(config, agent_provider)
     thread_tools = ThreadTools(agent_provider)
     filesystem_tools = FileSystemTools()
     available = {
         "event_tool": event_tools.event_tool,
         "get_current_datetime": datetime_tools.get_current_datetime,
+        "get_skill": skill_tools.get_skill,
+        "skill_crud": skill_tools.skill_crud,
         "send_discord": discord_tools.send_discord,
         "get_current_thread_id": thread_tools.get_current_thread_id,
         "read_file": filesystem_tools.read_file,
         "list_uploads": filesystem_tools.list_uploads,
     }
 
-    # get_current_datetime is enabled by default for every agent.
+    # get_current_datetime and get_skill are enabled by default for every agent.
     functions: dict[str, Callable[..., Any]] = {
         "get_current_datetime": available["get_current_datetime"],
+        "get_skill": available["get_skill"],
     }
 
     for item in enabled:
@@ -532,6 +699,8 @@ def make_builtin_tools(
         elif item in available:
             functions[item] = available[item]
         else:
-            logger.warning("Unknown builtin tool '%s' requested for agent '%s'", item, config.name)
+            logger.warning(
+                "Unknown builtin tool '%s' requested for agent '%s'", item, config.name
+            )
 
     return functions

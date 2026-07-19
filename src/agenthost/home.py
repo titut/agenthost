@@ -163,22 +163,6 @@ def _seed_default_agent_config(home: Path) -> None:
         "# Individual agents override these values in their own agent.yaml.\n"
         "# See templates/agent/agent.yaml for the full reference.\n\n"
         + yaml.safe_dump(DEFAULT_CONFIG, sort_keys=False, default_flow_style=False)
-        + "\n"
-        "# embedding:\n"
-        "#   model: BAAI/bge-m3\n"
-        "#   base_url: https://api.deepinfra.com/v1ai\n"
-        "#\n"
-        "# memory:\n"
-        "#   mode: rag\n"
-        "#   recent_messages: 8\n"
-        "#   chunk_size: 512\n"
-        "#   budget_tokens: 6000\n"
-        "#   max_chunks: 12\n"
-        "#   max_pool_chunks: 5000\n"
-        "#   similarity_weight: 0.6\n"
-        "#   recency_weight: 0.3\n"
-        "#   role_weight: 0.1\n"
-        "#   mmr_lambda: 0.7\n"
     )
     default_yaml.write_text(content, encoding="utf-8")
 

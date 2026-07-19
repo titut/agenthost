@@ -45,12 +45,28 @@ DEFAULT_CONFIG = {
     "model": "moonshotai/Kimi-K2.5",
     "host": "127.0.0.1",
     "temperature": 0.7,
-    "base_url": "https://api.deepinfra.com/v1ai",
+    "base_url": "https://api.deepinfra.com/v1",
     "max_tokens": 12000,
     "thinking": "low",
     "orchestrator": False,
     "frequency_penalty": 0.7,
     "presence_penalty": 0.7,
+    "embedding": {
+        "model": "BAAI/bge-m3",
+        "base_url": "https://api.deepinfra.com/v1",
+    },
+    "memory": {
+        "mode": "rag",
+        "recent_messages": 8,
+        "chunk_size": 512,
+        "budget_tokens": 6000,
+        "max_chunks": 12,
+        "max_pool_chunks": 5000,
+        "similarity_weight": 0.6,
+        "recency_weight": 0.3,
+        "role_weight": 0.1,
+        "mmr_lambda": 0.7,
+    },
 }
 
 
@@ -84,7 +100,7 @@ class EmbeddingConfig:
     """Embedding provider used for memory RAG."""
 
     model: str = "BAAI/bge-m3"
-    base_url: str | None = "https://api.deepinfra.com/v1ai"
+    base_url: str | None = "https://api.deepinfra.com/v1"
 
 
 @dataclass
@@ -160,11 +176,17 @@ class AgentConfig:
         else:
             parts.append("You are a helpful assistant.")
 
-        skills = self.skills
+        skills = self._agent_skills(self.skills_dir)
         if skills:
-            parts.append("\n\n# Skills\n")
-            for name, content in skills.items():
-                parts.append(f"\n## {name}\n\n{content}")
+            skill_lines = [
+                f"- `{name}`: {description}" if description else f"- `{name}`"
+                for name, description in skills
+            ]
+            parts.append(
+                "\n\n# Available Skills\n\n"
+                + "\n".join(skill_lines)
+                + "\n\nTo load the full content of a skill, call `get_skill(name)`."
+            )
 
         parts.append(
             "\n\n# Tool Usage Instructions\n\n"

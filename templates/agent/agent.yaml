@@ -33,6 +33,5 @@ memory:
   mmr_lambda: 0.7       # MMR balance between relevance and diversity
 
 extra:
-  # Add any agent-specific configuration here. Tools can read these values
-  # through the current agent config at runtime.
-  example_setting: true
+  builtin_tools: [events, discord, read_file, skill_crud]
+  discord_bridge_url: http://127.0.0.1:9002/send
