@@ -783,6 +783,82 @@ def start_outbound_server() -> aiohttp.web.Application:
             log("error", f"Failed to send Discord message to {channel_id}: {exc}")
             return aiohttp.web.json_response({"error": str(exc)}, status=500)
 
+    @routes.post("/edit")
+    async def edit_handler(request: aiohttp.web.Request) -> aiohttp.web.Response:
+        """Edit an existing Discord message by channel and message ID."""
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return aiohttp.web.json_response({"error": "invalid json"}, status=400)
+
+        text = data.get("text") or ""
+        thread_id = data.get("thread_id")
+        message_id = data.get("message_id")
+
+        if not isinstance(text, str):
+            return aiohttp.web.json_response({"error": "text must be a string"}, status=400)
+        if thread_id is None:
+            return aiohttp.web.json_response({"error": "missing thread_id"}, status=400)
+        if message_id is None:
+            return aiohttp.web.json_response({"error": "missing message_id"}, status=400)
+        if isinstance(thread_id, int):
+            thread_id = str(thread_id)
+        if not isinstance(thread_id, str):
+            return aiohttp.web.json_response({"error": "thread_id must be a string or integer"}, status=400)
+        if isinstance(message_id, int):
+            message_id = str(message_id)
+        if not isinstance(message_id, str):
+            return aiohttp.web.json_response({"error": "message_id must be a string or integer"}, status=400)
+        if not text:
+            return aiohttp.web.json_response({"error": "text must be non-empty"}, status=400)
+
+        try:
+            channel_id = int(thread_id)
+            msg_id = int(message_id)
+        except ValueError:
+            return aiohttp.web.json_response({"error": "thread_id and message_id must be valid integers"}, status=400)
+
+        try:
+            channel = await bot.fetch_channel(channel_id)
+        except discord.NotFound:
+            return aiohttp.web.json_response({"error": "channel not found"}, status=404)
+        except discord.Forbidden:
+            return aiohttp.web.json_response({"error": "cannot access channel"}, status=403)
+        except Exception as exc:
+            log("error", f"Failed to fetch channel {channel_id}: {exc}")
+            return aiohttp.web.json_response({"error": str(exc)}, status=500)
+
+        try:
+            message = await channel.fetch_message(msg_id)
+        except discord.NotFound:
+            return aiohttp.web.json_response({"error": "message not found"}, status=404)
+        except discord.Forbidden:
+            return aiohttp.web.json_response({"error": "cannot access message"}, status=403)
+        except Exception as exc:
+            log("error", f"Failed to fetch message {msg_id} in channel {channel_id}: {exc}")
+            return aiohttp.web.json_response({"error": str(exc)}, status=500)
+
+        try:
+            truncated = truncate_message(text, limit=MAX_MESSAGE_LENGTH - 100)
+            if not truncated:
+                return aiohttp.web.json_response({"error": "empty message"}, status=400)
+            await message.edit(content=truncated)
+            log("info", f"Outbound /edit message {msg_id} in channel {channel_id}")
+            return aiohttp.web.json_response({"ok": True, "thread_id": thread_id, "message_id": message_id})
+        except discord.HTTPException as exc:
+            detail = getattr(exc, "text", str(exc))
+            log(
+                "error",
+                f"Failed to edit Discord message {msg_id}: HTTP {exc.status} code {exc.code}: {detail}",
+            )
+            return aiohttp.web.json_response(
+                {"error": f"Discord API error {exc.status}: {detail}"},
+                status=500,
+            )
+        except Exception as exc:
+            log("error", f"Failed to edit Discord message {msg_id}: {exc}")
+            return aiohttp.web.json_response({"error": str(exc)}, status=500)
+
     app = aiohttp.web.Application()
     app.add_routes(routes)
     return app
@@ -822,7 +898,7 @@ async def main() -> None:
     await runner.setup()
     site = aiohttp.web.TCPSite(runner, BRIDGE_HTTP_HOST, BRIDGE_HTTP_PORT)
     await site.start()
-    log("info", f"Outbound server listening on http://{BRIDGE_HTTP_HOST}:{BRIDGE_HTTP_PORT}/send")
+    log("info", f"Outbound server listening on http://{BRIDGE_HTTP_HOST}:{BRIDGE_HTTP_PORT}/send and /edit")
 
     try:
         await bot.start(BOT_TOKEN)

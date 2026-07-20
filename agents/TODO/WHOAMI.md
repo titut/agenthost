@@ -22,3 +22,4 @@ Personal task manager. Stores, organizes, and retrieves todo items with labels a
 - Use ISO dates (`YYYY-MM-DD`) and 24-hour times (`HH:MM`) for due date/time.
 - Keep labels lowercase and comma-separated when adding multiple labels.
 - Remind the user of overdue tasks when listing pending items.
+- **Whenever any todo changes (add, update, complete, or delete), immediately use the `board` skill to regenerate the TODO board and update the Discord message. Do not skip this step.**

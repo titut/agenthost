@@ -476,7 +476,7 @@ class ThreadTools:
 
 
 class DiscordTools:
-    """Tool for sending outbound Discord messages via the bridge's /send endpoint."""
+    """Tools for outbound Discord messages via the bridge's /send and /edit endpoints."""
 
     def __init__(
         self,
@@ -536,12 +536,52 @@ class DiscordTools:
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"error": f"Failed to send Discord message: {exc}"})
 
+    async def edit_discord_message(self, text: str, thread_id: str, message_id: str) -> str:
+        """Edit an existing Discord message.
+
+        Args:
+            text: The new text content for the message.
+            thread_id: The Discord channel ID (or DM channel ID) containing the message.
+            message_id: The Discord message ID to edit.
+        """
+        edit_url = self._edit_bridge_url()
+        payload: dict[str, object] = {
+            "text": text,
+            "thread_id": thread_id,
+            "message_id": message_id,
+        }
+
+        try:
+            response = httpx.post(
+                edit_url,
+                json=payload,
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            return json.dumps(
+                {
+                    "status": "edited",
+                    "thread_id": thread_id,
+                    "message_id": message_id,
+                    "bridge": edit_url,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({"error": f"Failed to edit Discord message: {exc}"})
+
     def _bridge_url(self) -> str:
         return (
             self.config.extra.get("discord_bridge_url")
             or os.environ.get("DISCORD_BRIDGE_URL")
             or "http://127.0.0.1:9002/send"
         )
+
+    def _edit_bridge_url(self) -> str:
+        """Return the edit endpoint URL by replacing '/send' with '/edit' in the bridge URL."""
+        url = self._bridge_url()
+        if url.endswith("/send"):
+            return url[:-5] + "/edit"
+        return url.rstrip("/") + "/edit"
 
     def _resolve_agenthost_path(self, path: str) -> Path | str:
         """Resolve a path relative to the agenthost home directory.
@@ -613,6 +653,12 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
             "If you are unsure of the current thread_id, call `get_current_thread_id()` first. "
             "file_path, when provided, should be a relative path from the agenthost home directory (e.g. 'output/markdown_writer/file.md')."
         )
+    if "discord" in enabled or "edit_discord_message" in enabled:
+        descriptions.append(
+            "- `edit_discord_message(text, thread_id, message_id)`: Edit an existing Discord message. "
+            "Use this when the user asks you to update a previously sent Discord message. "
+            "thread_id is the Discord channel ID, and message_id is the Discord message ID to edit."
+        )
     if "thread" in enabled or "get_current_thread_id" in enabled:
         descriptions.append(
             "- `get_current_thread_id()`: Return the current conversation thread_id. "
@@ -673,6 +719,7 @@ def make_builtin_tools(
         "get_skill": skill_tools.get_skill,
         "skill_crud": skill_tools.skill_crud,
         "send_discord": discord_tools.send_discord,
+        "edit_discord_message": discord_tools.edit_discord_message,
         "get_current_thread_id": thread_tools.get_current_thread_id,
         "read_file": filesystem_tools.read_file,
         "list_uploads": filesystem_tools.list_uploads,
@@ -691,6 +738,7 @@ def make_builtin_tools(
             functions["get_current_datetime"] = available["get_current_datetime"]
         elif item == "discord":
             functions["send_discord"] = available["send_discord"]
+            functions["edit_discord_message"] = available["edit_discord_message"]
         elif item == "thread":
             functions["get_current_thread_id"] = available["get_current_thread_id"]
         elif item == "filesystem":
