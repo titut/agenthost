@@ -1,5 +1,5 @@
 name: GMAIL_AGENT
-model: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
+model: moonshotai/Kimi-K2.5
 temperature: 0.3
 frequency_penalty: 0.8
 presence_penalty: 0.8
