@@ -32,7 +32,7 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from agenthost.filesystem_tools import save_upload_with_text
+from agenthost.filesystem_tools import save_upload
 from agenthost.home import get_agenthost_home
 
 load_dotenv()
@@ -502,7 +502,7 @@ async def handle_guild_message(message: discord.Message) -> None:
 async def build_prompt_with_attachments(
     message: discord.Message, base_prompt: str = ""
 ) -> str:
-    """Download attachments, extract text, save to uploads/, and build a preamble.
+    """Download attachments, save them to uploads/, and build a preamble.
 
     Returns the base_prompt prefixed with metadata about any saved uploads.
     Sends a short confirmation to Discord if attachments were processed.
@@ -539,17 +539,16 @@ async def build_prompt_with_attachments(
                 tmp.write(data)
                 tmp_path = Path(tmp.name)
 
-            original_rel, text_rel = await asyncio.to_thread(
-                save_upload_with_text, tmp_path, filename
+            original_rel = await asyncio.to_thread(
+                save_upload, tmp_path, filename
             )
             tmp_path.unlink(missing_ok=True)
 
             preamble_lines.append(f"User uploaded: {original_rel}")
-            preamble_lines.append(f"Extracted text: {text_rel}")
             saved_count += 1
             log(
                 "info",
-                f"Saved upload {filename} -> {original_rel}, text -> {text_rel}",
+                f"Saved upload {filename} -> {original_rel}",
             )
         except Exception as exc:  # noqa: BLE001
             log("error", f"Failed to process attachment {filename}: {exc}")

@@ -52,15 +52,20 @@ def _resolve_and_guard(path: str) -> Path:
     return resolved
 
 
+# Suffixes that are not plain text but whose text can be extracted on demand.
+_EXTRACTABLE_SUFFIXES = {".docx", ".pdf", ".xlsx", ".csv"}
+
+
 class FileSystemTools:
     """Read-only tools for inspecting uploaded files and project documents."""
 
     def read_file(self, path: str, max_lines: int = 1000, offset: int = 1) -> str:
-        """Read lines from a text file inside the project directory.
+        """Read lines from a file inside the project directory.
 
         The path is resolved relative to the agenthost project root. Absolute
-        paths and ``..`` traversal are blocked. Useful for reading uploaded
-        documents that have been extracted to `.txt` sidecars.
+        paths and ``..`` traversal are blocked. Binary office documents
+        (``.docx``, ``.pdf``, ``.xlsx``, ``.csv``) are transparently converted
+        to text before reading.
 
         Args:
             path: Relative or absolute path inside the project directory.
@@ -80,10 +85,19 @@ class FileSystemTools:
         if not target.is_file():
             return json.dumps({"error": f"Path is not a file: {path}"})
 
+        suffix = target.suffix.lower()
         try:
-            with target.open("r", encoding="utf-8", errors="replace") as fh:
-                lines = fh.readlines()
+            if suffix in _EXTRACTABLE_SUFFIXES:
+                content = extract_text(target)
+                lines = content.splitlines(keepends=True)
+            else:
+                with target.open("r", encoding="utf-8", errors="replace") as fh:
+                    lines = fh.readlines()
         except UnicodeDecodeError:
+            return json.dumps(
+                {"error": f"File appears to be binary or non-text: {path}"}
+            )
+        except ValueError as exc:
             return json.dumps(
                 {"error": f"File appears to be binary or non-text: {path}"}
             )
@@ -107,10 +121,7 @@ class FileSystemTools:
         )
 
     def list_uploads(self) -> str:
-        """List files in the shared uploads directory.
-
-        Returns original files and their extracted text sidecars, if any.
-        """
+        """List files in the shared uploads directory."""
         try:
             UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
         except Exception as exc:  # noqa: BLE001
@@ -121,21 +132,10 @@ class FileSystemTools:
             for entry in sorted(UPLOADS_DIR.iterdir()):
                 if not entry.is_file():
                     continue
-                # Skip sidecar files themselves.
-                if entry.suffix.lower() == ".txt" and entry.with_suffix("").suffix.lower() not in PLAINTEXT_SUFFIXES:
-                    continue
-
-                if entry.suffix.lower() in PLAINTEXT_SUFFIXES:
-                    text_sidecar_name = entry.name
-                else:
-                    sidecar = Path(str(entry) + ".txt")
-                    text_sidecar_name = sidecar.name if sidecar.exists() else None
-
                 files.append(
                     {
                         "name": entry.name,
                         "size_bytes": entry.stat().st_size,
-                        "extracted_text": text_sidecar_name,
                     }
                 )
         except Exception as exc:  # noqa: BLE001
@@ -216,17 +216,10 @@ def _extract_csv(path: Path) -> str:
 PLAINTEXT_SUFFIXES = {".md", ".txt", ".json", ".yaml", ".yml"}
 
 
-def save_upload_with_text(
-    source_path: Path,
-    original_filename: str,
-) -> tuple[Path, Path]:
-    """Save an uploaded file and, if needed, an extracted text sidecar.
+def save_upload(source_path: Path, original_filename: str) -> Path:
+    """Save an uploaded file into the shared uploads directory.
 
-    Plain-text files (.txt, .md, .json, .yaml, .yml) are kept as-is and the
-    returned text_path points to the original file. Binary formats get a
-    `.txt` sidecar.
-
-    Returns (original_path, text_path) relative to the agenthost home directory.
+    Returns the saved path relative to the agenthost home directory.
     """
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -241,23 +234,4 @@ def save_upload_with_text(
 
     original_path = candidate
     original_path.write_bytes(source_path.read_bytes())
-
-    if suffix.lower() in PLAINTEXT_SUFFIXES:
-        return (
-            original_path.relative_to(PROJECT_ROOT),
-            original_path.relative_to(PROJECT_ROOT),
-        )
-
-    # Extract text and save sidecar.
-    try:
-        text = extract_text(original_path)
-    except Exception as exc:  # noqa: BLE001
-        text = f"[Extraction failed: {exc}]"
-
-    text_path = Path(str(original_path) + ".txt")
-    text_path.write_text(text, encoding="utf-8")
-
-    return (
-        original_path.relative_to(PROJECT_ROOT),
-        text_path.relative_to(PROJECT_ROOT),
-    )
+    return original_path.relative_to(PROJECT_ROOT)

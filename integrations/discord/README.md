@@ -137,7 +137,7 @@ The agent uses the unified `event_tool(action="add", action_name="...", ...)` to
 
 ## File Attachments
 
-You can upload files directly to the bot. The bridge downloads the file, extracts readable text, and saves both the original and a `.txt` sidecar to the shared `uploads/` folder so agents can read them.
+You can upload files directly to the bot. The bridge downloads the file and saves it to the shared `uploads/` folder. `read_file` can then read the file directly, transparently extracting text from supported formats.
 
 Supported formats:
 

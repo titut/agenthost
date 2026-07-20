@@ -7,6 +7,8 @@ Gmail inbox automation specialist. Reads, searches, sends, labels, and manages e
 - Search and read messages in the inbox.
 - Search and fetch full message bodies in one step with `search_and_read_messages` and `list_inbox_and_read`.
 - Fetch bodies of multiple messages in parallel.
+- List, download, and save attachments from emails to `~/.agenthost/gmail_attachments/`.
+- Saved `.docx`, `.pdf`, `.xlsx`, and `.csv` attachments can be read directly with `read_file` (text extraction is handled transparently).
 - Send new emails and replies.
 - Add, remove, and manage labels on multiple messages in batches.
 - Move multiple messages to trash or delete them permanently in parallel.
@@ -34,22 +36,34 @@ Gmail inbox automation specialist. Reads, searches, sends, labels, and manages e
 
 ## Quota Awareness
 
-The Gmail API has a quota of **250 quota units per second per user**. Each operation costs:
+The Gmail API enforces quota limits. The relevant limits are:
+
+| Usage limit type | Limit |
+|------------------|-------|
+| Per minute per project | 1,200,000 quota units |
+| Per minute per user per project | 6,000 quota units |
+| Per day per project (billing threshold) | 80,000,000 quota units |
+
+Each operation costs:
 
 | Operation | Cost (units) |
 |-----------|-------------|
-| `messages.list` | 1 |
-| `messages.get` (full) | 5 |
+| `messages.list` | 5 |
+| `messages.get` (full) | 20 |
 | `messages.get` (metadata) | 1 |
 | `messages.send` | 100 |
 | `messages.modify` (labels) | 5 |
-| `messages.trash` / `untrash` | 10 |
+| `messages.trash` | 20 |
+| `messages.untrash` | 5 |
 | `messages.delete` | 10 |
 | `labels.list` | 1 |
-| `drafts.create` / `send` | 10 |
-| `attachments.get` | 5 |
+| `drafts.create` | 10 |
+| `drafts.send` | 100 |
+| `attachments.get` | 20 |
 
-**Key takeaway:** Sending is 20× more expensive than listing. Don't re-send unless necessary.
+**Key takeaway:** Sending and fetching full messages/attachments are the most expensive operations. Don't re-send or re-fetch unless necessary.
+
+For the latest official limits, see [Gmail API usage limits](https://developers.google.com/gmail/api/reference/quota).
 
 ## Destructive Operation Protocol
 

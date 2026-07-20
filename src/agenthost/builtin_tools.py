@@ -666,12 +666,12 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
         )
     if "filesystem" in enabled or "read_file" in enabled:
         descriptions.append(
-            "- `read_file(path, max_lines, offset)`: Read a text file inside the project directory. "
-            "Use this to read uploaded documents that have been extracted to `.txt` sidecars."
+            "- `read_file(path, max_lines, offset)`: Read a file inside the project directory. "
+            "Text files are read directly; `.docx`, `.pdf`, `.xlsx`, and `.csv` are converted to text automatically."
         )
     if "filesystem" in enabled or "list_uploads" in enabled:
         descriptions.append(
-            "- `list_uploads()`: List files in the shared uploads directory, including extracted text sidecars."
+            "- `list_uploads()`: List files in the shared uploads directory."
         )
     if "skill_crud" in enabled:
         descriptions.append(

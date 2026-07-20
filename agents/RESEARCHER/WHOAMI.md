@@ -1,6 +1,6 @@
 # Description
 
-Bounded factual researcher that plans a small number of searches, executes them once, and then synthesizes a cited answer.
+Focused web researcher for narrow-scope questions. Send one topic or 2-3 related sub-questions. Avoid broad or multi-domain inquiries.
 
 # Capabilities
 

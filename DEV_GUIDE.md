@@ -54,7 +54,7 @@ Typical contents:
 | `~/.agenthost/keys.kdbx` | KeePass database of API keys and secrets, loaded by `agenthost key` and `cli.py` on serve. |
 | `~/.agenthost/agenthost.log` | Persistent log file written by `logger.py`. |
 | `~/.agenthost/default_agent.yaml` | Global default agent config (model, temperature, memory, etc.). |
-| `~/.agenthost/uploads/` | Files uploaded by users (e.g. via Discord). Extracted text sidecars (`.txt`) live next to originals. |
+| `~/.agenthost/uploads/` | Files uploaded by users (e.g. via Discord). `read_file` extracts text from office documents on demand. |
 | `~/.agenthost/output/` | Agent-generated output such as documents or reports. |
 | `~/.agenthost/memory/<agent>/` | Per-agent SQLite database (`memory.db`) storing conversation history and RAG embeddings. |
 | `~/.agenthost/entries/` | Legacy/global data directory migrated from the project root. |
