@@ -48,11 +48,17 @@ class Agent:
         self.memory = AgentMemory(config, self.embedding_client)
         builtins = make_builtin_tools(config, scheduler, agent_provider=lambda: self)
         self.tool_schemas, self.tool_runner = discover_tools(config.tools_dir, builtins, config=config)
-        self.system_prompt_initial = config.system_prompt + build_builtin_tools_prompt(config)
-        self.system_prompt_final = config.critical_instructions
         # Buffer the entire assistant response for orchestrator agents so we can
         # apply a post-processing sanitizer before streaming it to clients.
         self._buffer_content = config.orchestrator
+
+    def _system_prompt_initial(self) -> str:
+        """Return the initial system prompt, rebuilt from disk each request.
+
+        This makes skill additions/deletions visible on the next turn without
+        restarting the agent.
+        """
+        return self.config.system_prompt + build_builtin_tools_prompt(self.config)
 
     async def chat(self, thread_id: str, user_message: str) -> AsyncIterator[str]:
         # Expose the current thread_id to built-in tools that need it.
@@ -74,6 +80,7 @@ class Agent:
         tool_round = 0
         max_tool_rounds = 15
         recent_tool_errors: list[str] = []
+        pending_tool_messages: list[dict[str, Any]] = []
 
         async def _graceful_error(message: str) -> str:
             logger.error(message)
@@ -142,7 +149,7 @@ class Agent:
                 except Exception as repair_err:
                     logger.warning("Repair failed for thread '%s': %s", thread_id, repair_err)
 
-                messages = await self._build_messages(thread_id)
+                messages = await self._build_messages(thread_id, pending_tool_messages)
                 await asyncio.sleep(1)
                 continue
 
@@ -283,8 +290,10 @@ class Agent:
                     thread_id,
                     json.dumps(tool_calls, default=str),
                 )
-                # Persist assistant's tool call request.
-                await self.memory.append_message(thread_id, {"role": "assistant", "tool_calls": tool_calls})
+                # Keep the assistant tool-call request and matching tool results in
+                # memory only for the current turn; they are passed to the next LLM
+                # request via pending_tool_messages and discarded afterward.
+                pending_tool_messages.append({"role": "assistant", "tool_calls": tool_calls})
 
                 for tc in tool_calls:
                     name = tc["function"]["name"]
@@ -330,13 +339,11 @@ class Agent:
                         "name": name,
                         "content": result,
                     }
-                    await self.memory.append_message(thread_id, tool_msg)
+                    pending_tool_messages.append(tool_msg)
 
-                # Rebuild the message list from memory so the final system prompt
-                # (critical instructions) is placed after the tool results. Without
-                # this, the model only sees the reminder before the original user
-                # message and may treat the tool result as the end of the turn.
-                messages = await self._build_messages(thread_id)
+                # Rebuild the message list with the pending tool messages so the
+                # final system prompt (critical instructions) is placed after them.
+                messages = await self._build_messages(thread_id, pending_tool_messages)
                 continue
 
             if assistant_content:
@@ -354,14 +361,23 @@ class Agent:
             )
             break
 
-    async def _build_messages(self, thread_id: str) -> list[dict[str, Any]]:
+    async def _build_messages(
+        self,
+        thread_id: str,
+        pending_tool_messages: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
         # Build the prompt for the next generation. The initial system prompt
         # (WHOAMI / role) goes at the start, optional RAG context from older
         # messages follows, then the recent conversation history, the current
-        # user message, the current date/time, and finally the critical
-        # instructions as the freshest context.
+        # user message, any in-progress tool calls and results for this turn,
+        # the current date/time, and finally the critical instructions as the
+        # freshest context.
+        #
+        # Tool call and tool result messages are passed in pending_tool_messages
+        # instead of being persisted to memory, so they don't consume slots in
+        # the recent-message window after this turn ends.
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": self.system_prompt_initial}
+            {"role": "system", "content": self._system_prompt_initial()}
         ]
 
         history = self.memory.get_messages(thread_id)
@@ -439,6 +455,12 @@ class Agent:
             current_user_copy.pop("created_at", None)
             messages.append(current_user_copy)
 
+        # Inject tool calls and results for the current turn. These are kept out
+        # of memory so they don't crowd the recent-message window; they are only
+        # needed to let the model respond to the current turn's tools.
+        if pending_tool_messages:
+            messages.extend(pending_tool_messages)
+
         # The current date and time are injected on every request so the agent
         # always has a fresh temporal reference, even when previous tool results
         # in the conversation history are stale.
@@ -447,8 +469,8 @@ class Agent:
         # Place the critical-instruction reminder at the very end of the payload.
         # This ensures it is the freshest context for the next assistant generation,
         # even when we rebuild the list after tool results mid-turn.
-        if self.system_prompt_final:
-            messages.append({"role": "system", "content": self.system_prompt_final})
+        if self.config.critical_instructions:
+            messages.append({"role": "system", "content": self.config.critical_instructions})
 
         return messages
 
