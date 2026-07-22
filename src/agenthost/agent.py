@@ -304,6 +304,34 @@ class Agent:
                 for chunk in self._chunk_text(assistant_content, chunk_size=1000):
                     yield json.dumps({"type": "content", "data": chunk}) + "\n"
 
+            # If the model hit max_tokens mid-generation (no tool_calls, just a
+            # partial response), inject the partial output and a continuation
+            # prompt so the model can pick up where it left off with a fresh
+            # attention window. This prevents the model from losing the plot
+            # during long-running single-generation tasks.
+            if finish_reason == "length" and assistant_content and not tool_calls:
+                logger.info(
+                    "Agent '%s' thread '%s' hit max_tokens mid-generation; "
+                    "continuing with fresh attention window",
+                    self.config.name,
+                    thread_id,
+                )
+                pending_tool_messages.append(
+                    {"role": "assistant", "content": assistant_content}
+                )
+                pending_tool_messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "You were cut off mid-response. Continue exactly where you "
+                            "left off. Do NOT repeat or summarize what was already written."
+                        ),
+                    }
+                )
+                assistant_content = ""
+                messages = await self._build_messages(thread_id, pending_tool_messages)
+                continue
+
             if tool_calls:
                 tool_round += 1
                 if tool_round > max_tool_rounds:
