@@ -1,4 +1,5 @@
 """Core agent: loads config, tools, skills, memory, and runs the LLM loop."""
+
 from __future__ import annotations
 
 import asyncio
@@ -47,7 +48,9 @@ class Agent:
         self.embedding_client = EmbeddingClient(config.embedding)
         self.memory = AgentMemory(config, self.embedding_client)
         builtins = make_builtin_tools(config, scheduler, agent_provider=lambda: self)
-        self.tool_schemas, self.tool_runner = discover_tools(config.tools_dir, builtins, config=config)
+        self.tool_schemas, self.tool_runner = discover_tools(
+            config.tools_dir, builtins, config=config
+        )
         # Buffer the entire assistant response for orchestrator agents so we can
         # apply a post-processing sanitizer before streaming it to clients.
         self._buffer_content = config.orchestrator
@@ -72,7 +75,9 @@ class Agent:
             logger.warning(
                 "Repaired %d dangling tool_calls in thread '%s'", removed, thread_id
             )
-        await self.memory.append_message(thread_id, {"role": "user", "content": user_message})
+        await self.memory.append_message(
+            thread_id, {"role": "user", "content": user_message}
+        )
         messages = await self._build_messages(thread_id)
 
         attempt = 0
@@ -84,7 +89,9 @@ class Agent:
 
         async def _graceful_error(message: str) -> str:
             logger.error(message)
-            await self.memory.append_message(thread_id, {"role": "assistant", "content": message})
+            await self.memory.append_message(
+                thread_id, {"role": "assistant", "content": message}
+            )
             return json.dumps({"type": "error", "data": message}) + "\n"
 
         while True:
@@ -145,9 +152,13 @@ class Agent:
                 try:
                     removed = self.memory.repair_thread(thread_id)
                     if removed:
-                        logger.warning("Repaired %d messages in thread '%s'", removed, thread_id)
+                        logger.warning(
+                            "Repaired %d messages in thread '%s'", removed, thread_id
+                        )
                 except Exception as repair_err:
-                    logger.warning("Repair failed for thread '%s': %s", thread_id, repair_err)
+                    logger.warning(
+                        "Repair failed for thread '%s': %s", thread_id, repair_err
+                    )
 
                 messages = await self._build_messages(thread_id, pending_tool_messages)
                 await asyncio.sleep(1)
@@ -191,10 +202,12 @@ class Agent:
                                 think_buffer += raw[:end]
                                 if think_buffer:
                                     thinking_content += think_buffer
-                                    yield json.dumps({"type": "thinking", "data": think_buffer}) + "\n"
+                                    yield json.dumps(
+                                        {"type": "thinking", "data": think_buffer}
+                                    ) + "\n"
                                 think_buffer = ""
                                 in_think_tag = False
-                                raw = raw[end + len("</think>"):]
+                                raw = raw[end + len("</think>") :]
                                 continue
 
                             start = raw.find("<think>")
@@ -204,8 +217,10 @@ class Agent:
                             if before:
                                 assistant_content += before
                                 if not self._buffer_content:
-                                    yield json.dumps({"type": "content", "data": before}) + "\n"
-                            raw = raw[start + len("<think>"):]
+                                    yield json.dumps(
+                                        {"type": "content", "data": before}
+                                    ) + "\n"
+                            raw = raw[start + len("<think>") :]
                             end = raw.find("</think>")
                             if end == -1:
                                 think_buffer = raw
@@ -215,13 +230,17 @@ class Agent:
                                 thinking = raw[:end]
                                 if thinking:
                                     thinking_content += thinking
-                                    yield json.dumps({"type": "thinking", "data": thinking}) + "\n"
-                                raw = raw[end + len("</think>"):]
+                                    yield json.dumps(
+                                        {"type": "thinking", "data": thinking}
+                                    ) + "\n"
+                                raw = raw[end + len("</think>") :]
 
                         if raw:
                             assistant_content += raw
                             if not self._buffer_content:
-                                yield json.dumps({"type": "content", "data": raw}) + "\n"
+                                yield json.dumps(
+                                    {"type": "content", "data": raw}
+                                ) + "\n"
 
                     if delta.tool_calls:
                         for tc in delta.tool_calls:
@@ -235,21 +254,34 @@ class Agent:
                                     index,
                                 )
                             while len(tool_calls) <= index:
-                                tool_calls.append({"id": f"call_{len(tool_calls)}", "type": "function", "function": {"name": "", "arguments": ""}})
+                                tool_calls.append(
+                                    {
+                                        "id": f"call_{len(tool_calls)}",
+                                        "type": "function",
+                                        "function": {"name": "", "arguments": ""},
+                                    }
+                                )
                             if tc.id:
                                 tool_calls[index]["id"] = tc.id
                             if tc.function and tc.function.name:
                                 tool_calls[index]["function"]["name"] = tc.function.name
                             if tc.function and tc.function.arguments:
-                                tool_calls[index]["function"]["arguments"] += tc.function.arguments
+                                tool_calls[index]["function"][
+                                    "arguments"
+                                ] += tc.function.arguments
 
                             # Preserve provider-specific fields (e.g. Gemini's
                             # thought_signature) that the OpenAI SDK does not model.
                             extra = getattr(tc, "model_extra", None) or {}
                             for key, value in extra.items():
-                                if key not in ("id", "index", "type", "function") and value is not None:
+                                if (
+                                    key not in ("id", "index", "type", "function")
+                                    and value is not None
+                                ):
                                     tool_calls[index][key] = value
-                                    logger.debug("Preserved tool-call extra field: %s", key)
+                                    logger.debug(
+                                        "Preserved tool-call extra field: %s", key
+                                    )
             except asyncio.CancelledError:
                 logger.warning(
                     "LLM stream cancelled for thread '%s' (client disconnected?)",
@@ -278,8 +310,9 @@ class Agent:
                     error_lines = "\n".join(f"- {e}" for e in recent_tool_errors[-5:])
                     error_summary = (
                         f"I tried using tools {tool_round - 1} times but kept running into issues. "
-                        "Recent tool errors:\n" + (error_lines or "(no specific errors recorded)") +
-                        "\n\nI stopped to avoid an API error. Try rephrasing your request, "
+                        "Recent tool errors:\n"
+                        + (error_lines or "(no specific errors recorded)")
+                        + "\n\nI stopped to avoid an API error. Try rephrasing your request, "
                         "or specify one simple action at a time."
                     )
                     yield _graceful_error(error_summary)
@@ -293,7 +326,9 @@ class Agent:
                 # Keep the assistant tool-call request and matching tool results in
                 # memory only for the current turn; they are passed to the next LLM
                 # request via pending_tool_messages and discarded afterward.
-                pending_tool_messages.append({"role": "assistant", "tool_calls": tool_calls})
+                pending_tool_messages.append(
+                    {"role": "assistant", "tool_calls": tool_calls}
+                )
 
                 for tc in tool_calls:
                     name = tc["function"]["name"]
@@ -305,7 +340,12 @@ class Agent:
                         thread_id,
                         name,
                     )
-                    yield json.dumps({"type": "tool_start", "data": {"name": name, "arguments": args}}) + "\n"
+                    yield json.dumps(
+                        {
+                            "type": "tool_start",
+                            "data": {"name": name, "arguments": args},
+                        }
+                    ) + "\n"
                     try:
                         result = await self.tool_runner.run(
                             name, args, thread_id=self._current_thread_id
@@ -319,10 +359,22 @@ class Agent:
                             exc,
                         )
                         result = json.dumps(
-                            {"error": f"Tool '{name}' failed: {type(exc).__name__}: {exc}"}
+                            {
+                                "error": f"Tool '{name}' failed: {type(exc).__name__}: {exc}"
+                            }
                         )
-                        yield json.dumps({"type": "tool_error", "data": {"name": name, "error": result}}) + "\n"
-                    yield json.dumps({"type": "tool_result", "data": {"name": name, "result": result}}) + "\n"
+                        yield json.dumps(
+                            {
+                                "type": "tool_error",
+                                "data": {"name": name, "error": result},
+                            }
+                        ) + "\n"
+                    yield json.dumps(
+                        {
+                            "type": "tool_result",
+                            "data": {"name": name, "result": result},
+                        }
+                    ) + "\n"
 
                     # Tool results may be plain strings (e.g. "FILE_PATH: ...") or JSON.
                     # Only treat a parsed dict containing "error" as a tool error.
@@ -352,7 +404,17 @@ class Agent:
                     thread_id,
                     assistant_content,
                 )
-                await self.memory.append_message(thread_id, {"role": "assistant", "content": assistant_content})
+                await self.memory.append_message(
+                    thread_id, {"role": "assistant", "content": assistant_content}
+                )
+
+            # Persist this turn's tool interactions (assistant tool_calls + tool
+            # results) to memory so they are available for RAG retrieval in future
+            # turns. They are NOT included in the recent-message window — only
+            # user and final assistant text messages count toward that limit.
+            for pmsg in pending_tool_messages:
+                await self.memory.append_message(thread_id, pmsg)
+
             logger.info(
                 "Agent '%s' thread '%s' finished turn with %d total messages",
                 self.config.name,
@@ -389,11 +451,34 @@ class Agent:
             await self.memory.rewrite_thread(thread_id, normalized_history)
 
         # Split history into the recent window (verbatim) and older messages
-        # (retrieved via RAG). Keep at least the current user turn if it exists.
+        # (retrieved via RAG). Tool interactions (assistant tool_calls and tool
+        # results) are excluded from the recent window so they don't consume
+        # slots, but they remain in the full history for RAG retrieval.
+        def _is_tool_interaction(msg: dict[str, Any]) -> bool:
+            if msg.get("role") == "tool":
+                return True
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                return True
+            return False
+
+        conversation_history = [
+            m for m in normalized_history if not _is_tool_interaction(m)
+        ]
+
         cfg = self.config.memory
         recent_count = max(cfg.recent_messages, 1)
-        recent_history = normalized_history[-recent_count:]
-        older_history = normalized_history[:-recent_count] if len(normalized_history) > recent_count else []
+        # Use the conversation-only list (no tool interactions) for the recent
+        # window. Fall back to the full history if filtering left nothing.
+        if conversation_history:
+            recent_history = conversation_history[-recent_count:]
+            older_history = (
+                conversation_history[:-recent_count]
+                if len(conversation_history) > recent_count
+                else []
+            )
+        else:
+            recent_history = normalized_history[-recent_count:]
+            older_history = []
 
         # Use the latest user message as the RAG query. If the current turn is
         # a tool round, this finds the original user question.
@@ -403,9 +488,11 @@ class Agent:
                 query_text = msg["content"]
                 break
 
-        # Retrieve relevant chunks from older messages, excluding any that are
-        # already in the recent window.
-        if older_history and query_text:
+        # Retrieve relevant chunks from the full history. Tool interactions
+        # (stored in the DB but excluded from the recent window) are included
+        # in the candidate pool. Messages already in the recent window are
+        # excluded via exclude_message_ids so we don't duplicate context.
+        if normalized_history and query_text:
             recent_ids = {msg.get("id") for msg in recent_history if msg.get("id")}
             rag_chunks = await self.memory.retrieve_relevant_chunks(
                 thread_id,
@@ -470,7 +557,9 @@ class Agent:
         # This ensures it is the freshest context for the next assistant generation,
         # even when we rebuild the list after tool results mid-turn.
         if self.config.critical_instructions:
-            messages.append({"role": "system", "content": self.config.critical_instructions})
+            messages.append(
+                {"role": "system", "content": self.config.critical_instructions}
+            )
 
         return messages
 
@@ -563,7 +652,9 @@ class Agent:
                     next_content = cleaned[j].get("content") or ""
                     if next_content:
                         separator = "\n\n" if merged_content else ""
-                        merged_content = f"{merged_content}{separator}{next_content}".strip()
+                        merged_content = (
+                            f"{merged_content}{separator}{next_content}".strip()
+                        )
                     next_created_at = cleaned[j].get("created_at")
                     if next_created_at and (
                         merged_created_at is None or next_created_at < merged_created_at
@@ -588,10 +679,13 @@ class Agent:
                         msg_content = msg.get("content") or ""
                         if msg_content:
                             separator = "\n\n" if prev_content else ""
-                            prev["content"] = f"{prev_content}{separator}{msg_content}".strip()
+                            prev["content"] = (
+                                f"{prev_content}{separator}{msg_content}".strip()
+                            )
                         msg_created_at = msg.get("created_at")
                         if msg_created_at and (
-                            prev.get("created_at") is None or msg_created_at < prev["created_at"]
+                            prev.get("created_at") is None
+                            or msg_created_at < prev["created_at"]
                         ):
                             prev["created_at"] = msg_created_at
                         i += 1
@@ -603,7 +697,9 @@ class Agent:
 
                 if msg.get("tool_calls"):
                     # Collect immediately following tool messages.
-                    expected_ids = {tc.get("id") for tc in msg["tool_calls"] if tc.get("id")}
+                    expected_ids = {
+                        tc.get("id") for tc in msg["tool_calls"] if tc.get("id")
+                    }
                     j = i + 1
                     following_tools: list[dict[str, Any]] = []
                     while j < n and cleaned[j].get("role") == "tool":
@@ -611,7 +707,9 @@ class Agent:
                         j += 1
 
                     found_ids = {t.get("tool_call_id") for t in following_tools}
-                    had_missing_responses = expected_ids and not expected_ids <= found_ids
+                    had_missing_responses = (
+                        expected_ids and not expected_ids <= found_ids
+                    )
                     if had_missing_responses:
                         # Dangling tool_call after a stop/interrupt. Preserve the
                         # assistant message and any real tool responses, then add
