@@ -107,10 +107,18 @@ class Agent:
                 completion_kwargs["max_tokens"] = self.config.max_tokens
             if self.config.thinking is not None:
                 completion_kwargs["reasoning_effort"] = self.config.thinking
-            if self.config.frequency_penalty is not None:
-                completion_kwargs["frequency_penalty"] = self.config.frequency_penalty
-            if self.config.presence_penalty is not None:
-                completion_kwargs["presence_penalty"] = self.config.presence_penalty
+
+            # Continuation calls see their own prior output in the conversation
+            # context, so frequency/presence penalties must be zeroed out.
+            # Otherwise every word from call 1 is penalized and the model
+            # outputs nothing (finish_reason="stop" with empty content).
+            if not getattr(self, "_in_continuation", False):
+                if self.config.frequency_penalty is not None:
+                    completion_kwargs["frequency_penalty"] = (
+                        self.config.frequency_penalty
+                    )
+                if self.config.presence_penalty is not None:
+                    completion_kwargs["presence_penalty"] = self.config.presence_penalty
 
             estimated_tokens = _estimate_tokens(
                 completion_kwargs["messages"], completion_kwargs["model"]
@@ -316,6 +324,7 @@ class Agent:
                     self.config.name,
                     thread_id,
                 )
+                self._in_continuation = True
                 pending_tool_messages.append(
                     {"role": "assistant", "content": assistant_content}
                 )
