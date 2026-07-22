@@ -508,13 +508,24 @@ class Agent:
             recent_history = normalized_history[-recent_count:]
             older_history = []
 
-        # Use the latest user message as the RAG query. If the current turn is
-        # a tool round, this finds the original user question.
-        query_text = ""
-        for msg in reversed(normalized_history):
-            if msg.get("role") == "user" and msg.get("content"):
-                query_text = msg["content"]
-                break
+        # Build a compound RAG query from the recent conversation window so
+        # the embedding captures the full semantic arc, not just the latest
+        # user message. This improves retrieval of relevant older chunks
+        # (including tool interactions) when the user asks a short follow-up.
+        def _role_prefix(role: str | None) -> str:
+            """Return a short label prefix for a message role."""
+            if role == "user":
+                return "User:"
+            if role == "assistant":
+                return "Assistant:"
+            return f"{role or 'unknown'}:"
+
+        query_parts: list[str] = []
+        for msg in recent_history:
+            content = msg.get("content")
+            if content:
+                query_parts.append(f"{_role_prefix(msg.get('role'))} {content}")
+        query_text = "\n".join(query_parts)
 
         # Retrieve relevant chunks from the full history. Tool interactions
         # (stored in the DB but excluded from the recent window) are included

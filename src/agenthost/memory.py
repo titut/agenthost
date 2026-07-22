@@ -1,4 +1,5 @@
 """SQLite-backed memory for an agent with RAG retrieval."""
+
 from __future__ import annotations
 
 import json
@@ -47,8 +48,7 @@ class AgentMemory:
 
     def _init_db(self) -> None:
         with self._connect() as conn:
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     thread_id TEXT NOT NULL,
@@ -82,8 +82,7 @@ class AgentMemory:
                     value TEXT NOT NULL,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
-                """
-            )
+                """)
             conn.commit()
 
     def get_messages(self, thread_id: str) -> list[dict[str, Any]]:
@@ -225,9 +224,7 @@ class AgentMemory:
             message_id = cursor.lastrowid
             conn.commit()
 
-        await self._embed_and_store_message(
-            thread_id, message_id, message, created_at
-        )
+        await self._embed_and_store_message(thread_id, message_id, message, created_at)
 
     async def _embed_and_store_message(
         self,
@@ -261,7 +258,9 @@ class AgentMemory:
         message_index = self._message_index(thread_id, message_id)
 
         with self._connect() as conn:
-            for chunk_index, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+            for chunk_index, (chunk_text, embedding) in enumerate(
+                zip(chunks, embeddings)
+            ):
                 conn.execute(
                     "INSERT INTO embeddings "
                     "(message_id, thread_id, message_index, chunk_index, role, chunk_text, embedding, created_at) "
@@ -329,9 +328,7 @@ class AgentMemory:
             return []
 
         total_messages = self._message_count(thread_id)
-        scored = self._score_candidates(
-            candidates, query_embedding, total_messages
-        )
+        scored = self._score_candidates(candidates, query_embedding, total_messages)
         selected = self._mmr_select(
             scored, self.config.memory.max_chunks, self.config.memory.mmr_lambda
         )
@@ -403,7 +400,9 @@ class AgentMemory:
         timestamps: list[float] = []
         for cand in candidates:
             try:
-                timestamps.append(datetime.fromisoformat(cand["created_at"]).timestamp())
+                timestamps.append(
+                    datetime.fromisoformat(cand["created_at"]).timestamp()
+                )
             except (ValueError, TypeError):
                 timestamps.append(0.0)
 
@@ -461,8 +460,7 @@ class AgentMemory:
                         for s in selected
                     )
                     mmr_score = (
-                        lambda_param * cand["score"]
-                        - (1 - lambda_param) * max_sim
+                        lambda_param * cand["score"] - (1 - lambda_param) * max_sim
                     )
                 if mmr_score > best_mmr_score:
                     best_mmr_score = mmr_score
@@ -522,22 +520,21 @@ class AgentMemory:
     def clear_thread(self, thread_id: str) -> None:
         """Remove all messages and embeddings for a specific thread."""
         with self._connect() as conn:
+            conn.execute("DELETE FROM embeddings WHERE thread_id = ?", (thread_id,))
             conn.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
             conn.commit()
 
     def list_threads(self) -> list[dict[str, Any]]:
         """Return all thread IDs with a preview of their latest message."""
         with self._connect() as conn:
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT thread_id, role, content, created_at
                 FROM messages
                 WHERE id IN (
                     SELECT MAX(id) FROM messages GROUP BY thread_id
                 )
                 ORDER BY created_at DESC
-                """
-            ).fetchall()
+                """).fetchall()
 
         threads: list[dict[str, Any]] = []
         for row in rows:
