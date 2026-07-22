@@ -1,8 +1,8 @@
 name: ORCHESTRATOR
 model: moonshotai/Kimi-K2.5
 temperature: 0.4
-frequency_penalty: 0.7
-presence_penalty: 0.6
+frequency_penalty: 0.2
+presence_penalty: 0.2
 orchestrator: true
 thinking: medium
 
