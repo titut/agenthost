@@ -1085,7 +1085,14 @@ class ChatApp(App):
         event_type = event.get("type")
         event_data = event.get("data")
 
-        if event_type == "thinking":
+        if event_type == "continuation":
+            # A new LLM call is starting within the same turn (continuation
+            # after hitting max_tokens). Reset thinking and content state so
+            # the new call gets its own ThinkingCard and content bubble.
+            self._current_thinking = None
+            self._current_assistant = None
+
+        elif event_type == "thinking":
             if self._current_thinking is None:
                 self._current_thinking = ThinkingCard()
                 await self.chat_scroll.mount(self._current_thinking)

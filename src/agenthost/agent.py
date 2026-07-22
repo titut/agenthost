@@ -105,13 +105,10 @@ class Agent:
             }
             if self.config.max_tokens is not None:
                 completion_kwargs["max_tokens"] = self.config.max_tokens
-            if self.config.thinking is not None:
-                completion_kwargs["reasoning_effort"] = self.config.thinking
-
-            # Continuation calls see their own prior output in the conversation
-            # context, so frequency/presence penalties must be zeroed out.
-            # Otherwise every word from call 1 is penalized and the model
-            # outputs nothing (finish_reason="stop" with empty content).
+            # Continuation calls skip penalties (prior output is in context, so
+            # every word is already penalized) and disable reasoning (the model
+            # already deliberated in call 1; continuation calls focus on visible
+            # text).
             if not getattr(self, "_in_continuation", False):
                 if self.config.frequency_penalty is not None:
                     completion_kwargs["frequency_penalty"] = (
@@ -119,6 +116,10 @@ class Agent:
                     )
                 if self.config.presence_penalty is not None:
                     completion_kwargs["presence_penalty"] = self.config.presence_penalty
+                if self.config.thinking is not None:
+                    completion_kwargs["reasoning_effort"] = self.config.thinking
+            else:
+                completion_kwargs["reasoning_effort"] = "none"
 
             estimated_tokens = _estimate_tokens(
                 completion_kwargs["messages"], completion_kwargs["model"]
@@ -297,6 +298,17 @@ class Agent:
                 )
                 raise
 
+            logger.info(
+                "Agent '%s' thread '%s' stream ended: finish_reason=%s, "
+                "content_len=%d, tool_calls=%d, in_continuation=%s",
+                self.config.name,
+                thread_id,
+                finish_reason,
+                len(assistant_content),
+                len(tool_calls),
+                getattr(self, "_in_continuation", False),
+            )
+
             if assistant_content and self._buffer_content:
                 sanitized = self._sanitize_output(assistant_content)
                 if sanitized != assistant_content:
@@ -317,17 +329,35 @@ class Agent:
             # prompt so the model can pick up where it left off with a fresh
             # attention window. This prevents the model from losing the plot
             # during long-running single-generation tasks.
-            if finish_reason == "length" and assistant_content and not tool_calls:
+            if finish_reason == "length" and not tool_calls:
                 logger.info(
                     "Agent '%s' thread '%s' hit max_tokens mid-generation; "
-                    "continuing with fresh attention window",
+                    "continuing with fresh attention window (call_1_len=%d, "
+                    "call_1_tail='%s')",
                     self.config.name,
                     thread_id,
+                    len(assistant_content),
+                    assistant_content[-200:].replace("\n", "\\n"),
                 )
                 self._in_continuation = True
-                pending_tool_messages.append(
-                    {"role": "assistant", "content": assistant_content}
-                )
+                yield json.dumps({"type": "continuation"}) + "\n"
+                # Append the partial assistant output and continuation prompt
+                # to the existing pending_tool_messages (which already contain
+                # this turn's tool_calls and tool results). The DB history
+                # only contains the user message at this point, so the tool
+                # interactions must flow through pending_tool_messages.
+                if assistant_content:
+                    pending_tool_messages.append(
+                        {"role": "assistant", "content": assistant_content}
+                    )
+                if thinking_content:
+                    pending_tool_messages.append(
+                        {
+                            "role": "system",
+                            "content": f"[Previous reasoning:\n{thinking_content}\n]",
+                            "ephemeral": True,
+                        }
+                    )
                 pending_tool_messages.append(
                     {
                         "role": "system",
@@ -338,7 +368,17 @@ class Agent:
                     }
                 )
                 assistant_content = ""
+                thinking_content = ""
                 messages = await self._build_messages(thread_id, pending_tool_messages)
+                logger.info(
+                    "Agent '%s' thread '%s' continuation: rebuilt messages=%d, "
+                    "pending_tool_msgs=%d, last_5_roles=%s",
+                    self.config.name,
+                    thread_id,
+                    len(messages),
+                    len(pending_tool_messages),
+                    [m.get("role") for m in messages[-5:]],
+                )
                 continue
 
             if tool_calls:
@@ -450,7 +490,8 @@ class Agent:
             # turns. They are NOT included in the recent-message window — only
             # user and final assistant text messages count toward that limit.
             for pmsg in pending_tool_messages:
-                await self.memory.append_message(thread_id, pmsg)
+                if not pmsg.get("ephemeral"):
+                    await self.memory.append_message(thread_id, pmsg)
 
             logger.info(
                 "Agent '%s' thread '%s' finished turn with %d total messages",
