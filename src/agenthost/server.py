@@ -1,4 +1,5 @@
 """FastAPI server exposing an agent via HTTP + SSE."""
+
 from __future__ import annotations
 
 import asyncio
@@ -18,7 +19,6 @@ from agenthost.config import AgentConfig
 from agenthost.events import load_events, run_scheduled_event
 from agenthost.logger import setup_logging
 from agenthost.registry import register_agent, unregister_agent
-
 
 logger = setup_logging("agenthost.server")
 
@@ -60,14 +60,18 @@ def _publish_thread_event(thread_id: str, event_type: str, data: str) -> None:
 
 class ChatRequest(BaseModel):
     message: str
-    thread_id: str | None = Field(default=None, description="Conversation thread ID; omitted starts a new thread.")
+    thread_id: str | None = Field(
+        default=None, description="Conversation thread ID; omitted starts a new thread."
+    )
 
 
 class ChatResponse(BaseModel):
     thread_id: str
 
 
-def _find_free_port(host: str, start: int = DEFAULT_PORT_START, end: int = DEFAULT_PORT_END) -> int:
+def _find_free_port(
+    host: str, start: int = DEFAULT_PORT_START, end: int = DEFAULT_PORT_END
+) -> int:
     """Return the first available TCP port in the given range."""
     for port in range(start, end):
         with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
@@ -105,7 +109,7 @@ def build_app(agent: Agent, scheduler: AsyncIOScheduler | None = None) -> FastAP
             "status": "ok",
             "agent": agent.config.name,
             "model": agent.config.model,
-            "tools": [t["function"]["name"] for t in agent.tool_schemas],
+            "tools": [t["function"]["name"] for t in agent.default_tool_schemas],
         }
 
     @app.post("/clear")
@@ -142,9 +146,9 @@ def build_app(agent: Agent, scheduler: AsyncIOScheduler | None = None) -> FastAP
 
         async def event_stream() -> AsyncIterator[str]:
             # First event gives the thread_id so the client can continue the conversation.
-            meta_event = f"event: meta\ndata: {{\"thread_id\": \"{thread_id}\"}}\n\n"
+            meta_event = f'event: meta\ndata: {{"thread_id": "{thread_id}"}}\n\n'
             yield meta_event
-            _publish_thread_event(thread_id, "meta", f"{{\"thread_id\": \"{thread_id}\"}}")
+            _publish_thread_event(thread_id, "meta", f'{{"thread_id": "{thread_id}"}}')
 
             # Send periodic heartbeats while the agent is thinking or running tools.
             # This keeps long-lived SSE connections open for clients with short
@@ -197,7 +201,8 @@ def build_app(agent: Agent, scheduler: AsyncIOScheduler | None = None) -> FastAP
                     exc,
                 )
                 import json
-                error_data = json.dumps({'error': str(exc)})
+
+                error_data = json.dumps({"error": str(exc)})
                 _publish_thread_event(thread_id, "error", error_data)
                 yield f"event: error\ndata: {error_data}\n\n"
             finally:

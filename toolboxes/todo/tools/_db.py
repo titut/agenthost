@@ -41,6 +41,7 @@ def get_db() -> sqlite3.Connection:
     """Get or create a shared SQLite connection for the TODO database."""
     global _connection
     if _connection is None:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
         _connection = sqlite3.connect(str(DB_PATH))
         _connection.row_factory = sqlite3.Row
         _connection.execute("PRAGMA journal_mode=WAL")

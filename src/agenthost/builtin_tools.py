@@ -382,15 +382,17 @@ class SkillTools:
     def _skills_dir(self) -> Path:
         """Return the skills directory to use for get_skill.
 
-        When an active toolbox is loaded, its skills directory takes precedence so
-        the agent can retrieve the skills currently shown in the system prompt.
+        When the current thread has an active toolbox, its skills directory
+        takes precedence so the agent can retrieve the skills shown in the
+        system prompt.
         """
         agent = self._agent_provider() if self._agent_provider else None
-        if (
-            agent is not None
-            and getattr(agent, "active_toolbox_path", None) is not None
-        ):
-            return agent.active_toolbox_path / "skills"
+        if agent is not None:
+            thread_id = getattr(agent, "_current_thread_id", "")
+            if thread_id:
+                state = agent.thread_states.get(thread_id)
+                if state is not None and state.active_toolbox_path is not None:
+                    return state.active_toolbox_path / "skills"
         return self.config.skills_dir
 
     def get_skill(self, name: str) -> str:

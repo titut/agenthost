@@ -33,6 +33,26 @@ def _current_datetime_message() -> str:
 logger = setup_logging("agenthost.agent")
 
 
+class ThreadState:
+    """Per-thread toolbox state, tracked separately for each conversation.
+
+    Every thread starts with the agent's base tools and no active toolbox.
+    Calling ``toolbox(action='switch', target='<name>')`` updates only that
+    thread's state.
+    """
+
+    def __init__(
+        self,
+        tool_schemas: list[dict[str, Any]],
+        tool_runner: ToolRunner,
+    ):
+        self.tool_schemas = tool_schemas
+        self.tool_runner = tool_runner
+        self.active_toolbox: str | None = None
+        self.active_toolbox_path: Path | None = None
+        self.active_toolbox_skills: dict[str, str] = {}
+
+
 class Agent:
     def __init__(
         self,
@@ -53,36 +73,48 @@ class Agent:
         self.builtin_functions = make_builtin_tools(
             config, scheduler, agent_provider=lambda: self
         )
-        self.tool_schemas, self.tool_runner = discover_tools(
+        self.default_tool_schemas, self.default_tool_runner = discover_tools(
             config.tools_dir, self.builtin_functions, config=config
         )
-        # Toolbox state: only one toolbox is active at a time. When active, its
-        # tools and skills replace the agent's base tools/skills in the system
-        # prompt and tool runner. Memory and conversation state persist across
-        # switches.
-        self.active_toolbox: str | None = None
-        self.active_toolbox_path: Path | None = None
-        self.active_toolbox_skills: dict[str, str] = {}
+        # Per-thread toolbox state. Each thread can independently switch
+        # toolboxes; threads that have never switched use the agent's default
+        # tools and skills. Memory and conversation state persist across
+        # toolbox switches within a thread.
+        self.thread_states: dict[str, ThreadState] = {}
         # Buffer the entire assistant response for orchestrator agents so we can
         # apply a post-processing sanitizer before streaming it to clients.
         self._buffer_content = config.orchestrator
 
-    def _system_prompt_initial(self) -> str:
-        """Return the initial system prompt, rebuilt from disk each request.
+    def _get_thread_state(self, thread_id: str) -> ThreadState:
+        """Return the toolbox state for *thread_id*, creating it if needed.
 
-        This makes skill additions/deletions visible on the next turn without
-        restarting the agent.
+        A new state starts with the agent's default tools and no active toolbox.
         """
+        if thread_id not in self.thread_states:
+            self.thread_states[thread_id] = ThreadState(
+                tool_schemas=self.default_tool_schemas,
+                tool_runner=self.default_tool_runner,
+            )
+        return self.thread_states[thread_id]
+
+    def _system_prompt_initial(self, thread_id: str) -> str:
+        """Return the initial system prompt for a specific thread.
+
+        Rebuilt from disk each request so skill additions/deletions become
+        visible on the next turn without restarting. Toolbox-specific skills
+        and tools are taken from the thread's current state.
+        """
+        state = self._get_thread_state(thread_id)
         skills_dir = (
-            self.active_toolbox_path / "skills"
-            if self.active_toolbox_path is not None
+            state.active_toolbox_path / "skills"
+            if state.active_toolbox_path is not None
             else None
         )
         prompt = self.config.build_system_prompt(skills_dir)
-        if self.active_toolbox is not None:
+        if state.active_toolbox is not None:
             prompt += (
                 f"\n\n# Active Toolbox\n\n"
-                f"You are currently using the `{self.active_toolbox}` toolbox. "
+                f"You are currently using the `{state.active_toolbox}` toolbox. "
                 f"The tools and skills shown above belong to this toolbox. "
                 f"To change toolboxes, call `toolbox(action='switch', target='<name>')`. "
                 f"Pass an empty target to revert to the agent's default tools and skills."
@@ -90,18 +122,24 @@ class Agent:
         return prompt + build_builtin_tools_prompt(self.config)
 
     def switch_toolbox(self, name: str) -> str:
-        """Switch the active toolbox and rebuild the tool runner.
+        """Switch the active toolbox for the current thread.
 
-        Passing an empty name reverts to the agent's base tools and skills.
-        Built-in tools (including this one) are preserved across switches.
+        The thread is determined from ``self._current_thread_id`` (set during
+        ``chat()``).  Passing an empty name reverts the thread to the agent's
+        base tools and skills.  Built-in tools are preserved across switches.
+
+        Other threads are unaffected — they keep whatever toolbox they had
+        before (or the agent default if they never switched).
         """
+        thread_id: str = getattr(self, "_current_thread_id", "")
+
         if not name:
-            self.tool_schemas, self.tool_runner = discover_tools(
-                self.config.tools_dir, self.builtin_functions, config=self.config
-            )
-            self.active_toolbox = None
-            self.active_toolbox_path = None
-            self.active_toolbox_skills = {}
+            state = self._get_thread_state(thread_id)
+            state.tool_schemas = self.default_tool_schemas
+            state.tool_runner = self.default_tool_runner
+            state.active_toolbox = None
+            state.active_toolbox_path = None
+            state.active_toolbox_skills = {}
             return json.dumps(
                 {
                     "status": "reverted",
@@ -123,7 +161,10 @@ class Agent:
                 }
             )
 
-        if not (toolbox_path / "tools").is_dir() and not (toolbox_path / "skills").is_dir():
+        if (
+            not (toolbox_path / "tools").is_dir()
+            and not (toolbox_path / "skills").is_dir()
+        ):
             return json.dumps(
                 {
                     "error": (
@@ -133,17 +174,16 @@ class Agent:
                 }
             )
 
-        self.tool_schemas, self.tool_runner = discover_tools(
+        state = self._get_thread_state(thread_id)
+        state.tool_schemas, state.tool_runner = discover_tools(
             toolbox_path / "tools", self.builtin_functions, config=self.config
         )
-        self.active_toolbox = name
-        self.active_toolbox_path = toolbox_path
-        self.active_toolbox_skills = load_skills(toolbox_path / "skills")
+        state.active_toolbox = name
+        state.active_toolbox_path = toolbox_path
+        state.active_toolbox_skills = load_skills(toolbox_path / "skills")
 
-        available_tools = [
-            schema["function"]["name"] for schema in self.tool_schemas
-        ]
-        available_skills = list(self.active_toolbox_skills.keys())
+        available_tools = [schema["function"]["name"] for schema in state.tool_schemas]
+        available_skills = list(state.active_toolbox_skills.keys())
 
         return json.dumps(
             {
@@ -187,11 +227,12 @@ class Agent:
             return json.dumps({"type": "error", "data": message}) + "\n"
 
         while True:
+            state = self._get_thread_state(thread_id)
             completion_kwargs: dict[str, Any] = {
                 "model": self.config.model,
                 "messages": messages,
-                "tools": self.tool_schemas or None,
-                "tool_choice": "auto" if self.tool_schemas else None,
+                "tools": state.tool_schemas or None,
+                "tool_choice": "auto" if state.tool_schemas else None,
                 "temperature": self.config.temperature,
                 "stream": True,
             }
@@ -516,7 +557,7 @@ class Agent:
                         }
                     ) + "\n"
                     try:
-                        result = await self.tool_runner.run(
+                        result = await state.tool_runner.run(
                             name, args, thread_id=self._current_thread_id
                         )
                     except Exception as exc:  # noqa: BLE001
@@ -609,7 +650,7 @@ class Agent:
         # instead of being persisted to memory, so they don't consume slots in
         # the recent-message window after this turn ends.
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": self._system_prompt_initial()}
+            {"role": "system", "content": self._system_prompt_initial(thread_id)}
         ]
 
         history = self.memory.get_messages(thread_id)
