@@ -4,5 +4,5 @@ temperature: 0.4
 port: 8500
 
 extra:
-  builtin_tools: [toolbox]
+  builtin_tools: [toolbox, events, discord]
   discord_bridge_url: http://127.0.0.1:9005/send
