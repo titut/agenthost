@@ -61,7 +61,7 @@ DEFAULT_CONFIG = {
         "chunk_size": 512,
         "budget_tokens": 6000,
         "max_chunks": 12,
-        "max_pool_chunks": 5000,
+        "max_pool_chunks": 500,
         "similarity_weight": 0.6,
         "recency_weight": 0.3,
         "role_weight": 0.1,
