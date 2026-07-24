@@ -1,6 +1,7 @@
 name: GENERAL
 model: moonshotai/Kimi-K2.5
 temperature: 0.4
+port: 8500
 
 extra:
   builtin_tools: [toolbox]
