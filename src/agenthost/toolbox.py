@@ -8,6 +8,7 @@ keeping the same memory and conversation state.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -17,10 +18,30 @@ import agenthost
 def get_toolboxes_root() -> Path:
     """Return the project ``toolboxes/`` directory.
 
-    The toolboxes folder lives at the repository root, next to ``agents/`` and
-    ``templates/``. If it does not exist yet, the path is still returned so
+    Resolution order:
+    1. ``AGENTHOST_TOOLBOXES`` environment variable (absolute path or relative
+       to the current working directory).
+    2. ``toolboxes/`` under the current working directory, if it exists.
+    3. ``toolboxes/`` next to the installed agenthost package (derived from
+       ``agenthost.__file__``).
+
+    If the directory does not exist yet, the resolved path is still returned so
     callers can create it or report it as empty.
     """
+    # 1. Explicit override via environment variable.
+    env_override = os.environ.get("AGENTHOST_TOOLBOXES")
+    if env_override:
+        target = Path(env_override)
+        if not target.is_absolute():
+            target = Path.cwd() / target
+        return target.resolve()
+
+    # 2. CWD-relative toolboxes/ if it exists (e.g. user is inside the repo).
+    cwd_toolboxes = Path.cwd() / "toolboxes"
+    if cwd_toolboxes.is_dir():
+        return cwd_toolboxes
+
+    # 3. Package-relative fallback.
     package_dir = Path(agenthost.__file__).resolve().parent
     project_root = package_dir.parent.parent
     return project_root / "toolboxes"

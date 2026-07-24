@@ -386,7 +386,10 @@ class SkillTools:
         the agent can retrieve the skills currently shown in the system prompt.
         """
         agent = self._agent_provider() if self._agent_provider else None
-        if agent is not None and getattr(agent, "active_toolbox_path", None) is not None:
+        if (
+            agent is not None
+            and getattr(agent, "active_toolbox_path", None) is not None
+        ):
             return agent.active_toolbox_path / "skills"
         return self.config.skills_dir
 
@@ -410,9 +413,7 @@ class SkillTools:
             }
         )
 
-    def skill_crud(
-        self, action: str, name: str, content: str | None = None
-    ) -> str:
+    def skill_crud(self, action: str, name: str, content: str | None = None) -> str:
         """Create, update, or delete a skill file in the agent's base skills folder.
 
         Use this to manage the agent's own skills. Creating or updating a skill
@@ -433,7 +434,9 @@ class SkillTools:
 
         if not _is_valid_skill_name(name):
             return json.dumps(
-                {"error": f"Invalid skill name '{name}'. Use only letters, numbers, hyphens, and underscores."}
+                {
+                    "error": f"Invalid skill name '{name}'. Use only letters, numbers, hyphens, and underscores."
+                }
             )
 
         skill_path = self.config.skills_dir / f"{name}.md"
@@ -441,7 +444,9 @@ class SkillTools:
         if action == "create":
             if skill_path.exists():
                 return json.dumps(
-                    {"error": f"Skill '{name}' already exists. Use update to modify it."}
+                    {
+                        "error": f"Skill '{name}' already exists. Use update to modify it."
+                    }
                 )
             if content is None:
                 return json.dumps({"error": "content is required for create"})
@@ -472,7 +477,9 @@ class SkillTools:
         if not skill_path.exists():
             return json.dumps({"error": f"Skill '{name}' not found"})
         backup_path = _backup_skill(skill_path)
-        return json.dumps({"status": "deleted", "name": name, "backup": str(backup_path)})
+        return json.dumps(
+            {"status": "deleted", "name": name, "backup": str(backup_path)}
+        )
 
 
 class ThreadTools:
@@ -511,7 +518,11 @@ class ToolboxTools:
             target: Toolbox name. Required for "switch". Optional for "list";
                 if omitted, all available toolboxes are returned.
         """
-        from agenthost.toolbox import get_toolboxes_root, list_toolboxes, validate_toolbox_name
+        from agenthost.toolbox import (
+            get_toolboxes_root,
+            list_toolboxes,
+            validate_toolbox_name,
+        )
 
         action = action.lower().strip()
 
@@ -557,6 +568,7 @@ class ToolboxTools:
         return json.dumps(
             {"error": f"Unknown action '{action}'. Use 'list' or 'switch'."}
         )
+
 
 class DiscordTools:
     """Tools for outbound Discord messages via the bridge's /send and /edit endpoints."""
@@ -619,7 +631,9 @@ class DiscordTools:
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"error": f"Failed to send Discord message: {exc}"})
 
-    async def edit_discord_message(self, text: str, thread_id: str, message_id: str) -> str:
+    async def edit_discord_message(
+        self, text: str, thread_id: str, message_id: str
+    ) -> str:
         """Edit an existing Discord message.
 
         Args:
@@ -718,7 +732,7 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
         "Use this when a task matches one of the skills listed in the Available Skills section. "
         "The name must match the file stem shown in the list.",
     ]
-    if "toolbox" in enabled or "switch_toolbox" in enabled or "list_toolboxes" in enabled:
+    if "toolbox" in enabled:
         descriptions.append(
             "- `toolbox(action, target='')`: Manage the agent's active toolbox. "
             "action is one of 'list' or 'switch'. "
@@ -839,7 +853,7 @@ def make_builtin_tools(
         elif item == "filesystem":
             functions["read_file"] = available["read_file"]
             functions["list_uploads"] = available["list_uploads"]
-        elif item == "toolbox" or item == "switch_toolbox" or item == "list_toolboxes":
+        elif item == "toolbox":
             functions["toolbox"] = available["toolbox"]
         elif item in available:
             functions[item] = available[item]
