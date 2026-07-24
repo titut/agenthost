@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from openai import AsyncOpenAI, BadRequestError
@@ -14,6 +15,8 @@ from agenthost.config import AgentConfig, _estimate_tokens
 from agenthost.embeddings import EmbeddingClient
 from agenthost.logger import setup_logging
 from agenthost.memory import AgentMemory
+from agenthost.skills import load_skills
+from agenthost.toolbox import get_toolboxes_root, list_toolboxes, validate_toolbox_name
 from agenthost.tools import ToolRunner, discover_tools
 
 
@@ -47,10 +50,19 @@ class Agent:
             self.client = AsyncOpenAI(**kwargs)
         self.embedding_client = EmbeddingClient(config.embedding)
         self.memory = AgentMemory(config, self.embedding_client)
-        builtins = make_builtin_tools(config, scheduler, agent_provider=lambda: self)
-        self.tool_schemas, self.tool_runner = discover_tools(
-            config.tools_dir, builtins, config=config
+        self.builtin_functions = make_builtin_tools(
+            config, scheduler, agent_provider=lambda: self
         )
+        self.tool_schemas, self.tool_runner = discover_tools(
+            config.tools_dir, self.builtin_functions, config=config
+        )
+        # Toolbox state: only one toolbox is active at a time. When active, its
+        # tools and skills replace the agent's base tools/skills in the system
+        # prompt and tool runner. Memory and conversation state persist across
+        # switches.
+        self.active_toolbox: str | None = None
+        self.active_toolbox_path: Path | None = None
+        self.active_toolbox_skills: dict[str, str] = {}
         # Buffer the entire assistant response for orchestrator agents so we can
         # apply a post-processing sanitizer before streaming it to clients.
         self._buffer_content = config.orchestrator
@@ -61,7 +73,87 @@ class Agent:
         This makes skill additions/deletions visible on the next turn without
         restarting the agent.
         """
-        return self.config.system_prompt + build_builtin_tools_prompt(self.config)
+        skills_dir = (
+            self.active_toolbox_path / "skills"
+            if self.active_toolbox_path is not None
+            else None
+        )
+        prompt = self.config.build_system_prompt(skills_dir)
+        if self.active_toolbox is not None:
+            prompt += (
+                f"\n\n# Active Toolbox\n\n"
+                f"You are currently using the `{self.active_toolbox}` toolbox. "
+                f"The tools and skills shown above belong to this toolbox. "
+                f"To change toolboxes, call `toolbox(action='switch', target='<name>')`. "
+                f"Pass an empty target to revert to the agent's default tools and skills."
+            )
+        return prompt + build_builtin_tools_prompt(self.config)
+
+    def switch_toolbox(self, name: str) -> str:
+        """Switch the active toolbox and rebuild the tool runner.
+
+        Passing an empty name reverts to the agent's base tools and skills.
+        Built-in tools (including this one) are preserved across switches.
+        """
+        if not name:
+            self.tool_schemas, self.tool_runner = discover_tools(
+                self.config.tools_dir, self.builtin_functions, config=self.config
+            )
+            self.active_toolbox = None
+            self.active_toolbox_path = None
+            self.active_toolbox_skills = {}
+            return json.dumps(
+                {
+                    "status": "reverted",
+                    "toolbox": None,
+                    "message": "Switched back to the agent's default tools and skills.",
+                }
+            )
+
+        if not validate_toolbox_name(name):
+            return json.dumps({"error": f"Invalid toolbox name '{name}'."})
+
+        toolbox_path = get_toolboxes_root() / name
+        if not toolbox_path.exists():
+            available = list_toolboxes()
+            return json.dumps(
+                {
+                    "error": f"Toolbox '{name}' not found.",
+                    "available": available,
+                }
+            )
+
+        if not (toolbox_path / "tools").is_dir() and not (toolbox_path / "skills").is_dir():
+            return json.dumps(
+                {
+                    "error": (
+                        f"Toolbox '{name}' has no tools/ or skills/ directory; "
+                        "nothing to load."
+                    ),
+                }
+            )
+
+        self.tool_schemas, self.tool_runner = discover_tools(
+            toolbox_path / "tools", self.builtin_functions, config=self.config
+        )
+        self.active_toolbox = name
+        self.active_toolbox_path = toolbox_path
+        self.active_toolbox_skills = load_skills(toolbox_path / "skills")
+
+        available_tools = [
+            schema["function"]["name"] for schema in self.tool_schemas
+        ]
+        available_skills = list(self.active_toolbox_skills.keys())
+
+        return json.dumps(
+            {
+                "status": "switched",
+                "toolbox": name,
+                "tools": available_tools,
+                "skills": available_skills,
+            },
+            indent=2,
+        )
 
     async def chat(self, thread_id: str, user_message: str) -> AsyncIterator[str]:
         # Expose the current thread_id to built-in tools that need it.

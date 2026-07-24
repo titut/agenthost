@@ -371,8 +371,24 @@ class DateTimeTools:
 class SkillTools:
     """Tool for loading the full content of an agent skill on demand."""
 
-    def __init__(self, config: AgentConfig):
+    def __init__(
+        self,
+        config: AgentConfig,
+        agent_provider: Callable[[], "Agent"] | None = None,
+    ):
         self.config = config
+        self._agent_provider = agent_provider
+
+    def _skills_dir(self) -> Path:
+        """Return the skills directory to use for get_skill.
+
+        When an active toolbox is loaded, its skills directory takes precedence so
+        the agent can retrieve the skills currently shown in the system prompt.
+        """
+        agent = self._agent_provider() if self._agent_provider else None
+        if agent is not None and getattr(agent, "active_toolbox_path", None) is not None:
+            return agent.active_toolbox_path / "skills"
+        return self.config.skills_dir
 
     def get_skill(self, name: str) -> str:
         """Return the full markdown content of a skill by name.
@@ -384,7 +400,7 @@ class SkillTools:
         Args:
             name: The skill name, matching the file stem in the skills folder.
         """
-        skill_path = self.config.skills_dir / f"{name}.md"
+        skill_path = self._skills_dir() / f"{name}.md"
         if not skill_path.exists():
             return json.dumps({"error": f"Skill '{name}' not found"})
         return json.dumps(
@@ -397,11 +413,12 @@ class SkillTools:
     def skill_crud(
         self, action: str, name: str, content: str | None = None
     ) -> str:
-        """Create, update, or delete a skill file.
+        """Create, update, or delete a skill file in the agent's base skills folder.
 
         Use this to manage the agent's own skills. Creating or updating a skill
         requires a '# Description' section so it appears correctly in the
-        Available Skills list.
+        Available Skills list. This tool always targets the agent's base skills
+        folder, not the active toolbox.
 
         Args:
             action: One of "create", "update", "delete".
@@ -474,6 +491,72 @@ class ThreadTools:
         thread_id = getattr(agent, "_current_thread_id", None) if agent else None
         return json.dumps({"thread_id": thread_id or "unknown"})
 
+
+class ToolboxTools:
+    """Unified tool for listing and switching the agent's active toolbox."""
+
+    def __init__(
+        self,
+        config: AgentConfig,
+        agent_provider: Callable[[], "Agent"] | None,
+    ):
+        self.config = config
+        self._agent_provider = agent_provider
+
+    def toolbox(self, action: str, target: str = "") -> str:
+        """List or switch toolboxes.
+
+        Args:
+            action: One of "list" or "switch".
+            target: Toolbox name. Required for "switch". Optional for "list";
+                if omitted, all available toolboxes are returned.
+        """
+        from agenthost.toolbox import get_toolboxes_root, list_toolboxes, validate_toolbox_name
+
+        action = action.lower().strip()
+
+        if action == "switch":
+            if not target:
+                return json.dumps({"error": "target is required for action='switch'."})
+            agent = self._agent_provider() if self._agent_provider else None
+            if agent is None:
+                return json.dumps({"error": "Agent not available"})
+            return agent.switch_toolbox(target)
+
+        if action == "list":
+            if not target:
+                return json.dumps({"toolboxes": list_toolboxes()})
+
+            if not validate_toolbox_name(target):
+                return json.dumps({"error": f"Invalid toolbox name '{target}'."})
+
+            toolbox_path = get_toolboxes_root() / target
+            if not toolbox_path.exists():
+                return json.dumps(
+                    {
+                        "error": f"Toolbox '{target}' not found.",
+                        "available": list_toolboxes(),
+                    }
+                )
+
+            tools = self.config._agent_tools(toolbox_path / "tools")
+            skills = self.config._agent_skills(toolbox_path / "skills")
+            return json.dumps(
+                {
+                    "toolbox": target,
+                    "tools": [
+                        {"name": name, "description": desc} for name, desc in tools
+                    ],
+                    "skills": [
+                        {"name": name, "description": desc} for name, desc in skills
+                    ],
+                },
+                indent=2,
+            )
+
+        return json.dumps(
+            {"error": f"Unknown action '{action}'. Use 'list' or 'switch'."}
+        )
 
 class DiscordTools:
     """Tools for outbound Discord messages via the bridge's /send and /edit endpoints."""
@@ -635,6 +718,14 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
         "Use this when a task matches one of the skills listed in the Available Skills section. "
         "The name must match the file stem shown in the list.",
     ]
+    if "toolbox" in enabled or "switch_toolbox" in enabled or "list_toolboxes" in enabled:
+        descriptions.append(
+            "- `toolbox(action, target='')`: Manage the agent's active toolbox. "
+            "action is one of 'list' or 'switch'. "
+            "For 'list', omit target to see all toolboxes, or pass a target to see its tools and skills. "
+            "For 'switch', target is required and activates the named toolbox, replacing the current agent tools and skills. "
+            "Built-in tools are preserved. Pass an empty target to revert to the agent's default tools and skills."
+        )
     if "events" in enabled or "event_tool" in enabled:
         descriptions.append(
             "- `event_tool(action, action_name, schedule_type, prompt, time, every, unit, at, enabled)`: "
@@ -709,10 +800,11 @@ def make_builtin_tools(
     # Build the full tool registry first.
     event_tools = EventTools(config, scheduler, agent_provider)
     datetime_tools = DateTimeTools()
-    skill_tools = SkillTools(config)
+    skill_tools = SkillTools(config, agent_provider)
     discord_tools = DiscordTools(config, agent_provider)
     thread_tools = ThreadTools(agent_provider)
     filesystem_tools = FileSystemTools()
+    toolbox_tools = ToolboxTools(config, agent_provider)
     available = {
         "event_tool": event_tools.event_tool,
         "get_current_datetime": datetime_tools.get_current_datetime,
@@ -723,9 +815,12 @@ def make_builtin_tools(
         "get_current_thread_id": thread_tools.get_current_thread_id,
         "read_file": filesystem_tools.read_file,
         "list_uploads": filesystem_tools.list_uploads,
+        "toolbox": toolbox_tools.toolbox,
     }
 
-    # get_current_datetime and get_skill are enabled by default for every agent.
+    # get_current_datetime and get_skill are enabled by default for every
+    # agent. Toolbox management is opt-in via the "toolbox" group or the
+    # individual tool name in extra.builtin_tools.
     functions: dict[str, Callable[..., Any]] = {
         "get_current_datetime": available["get_current_datetime"],
         "get_skill": available["get_skill"],
@@ -744,6 +839,8 @@ def make_builtin_tools(
         elif item == "filesystem":
             functions["read_file"] = available["read_file"]
             functions["list_uploads"] = available["list_uploads"]
+        elif item == "toolbox" or item == "switch_toolbox" or item == "list_toolboxes":
+            functions["toolbox"] = available["toolbox"]
         elif item in available:
             functions[item] = available[item]
         else:

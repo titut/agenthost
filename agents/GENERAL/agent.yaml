@@ -1,0 +1,6 @@
+name: GENERAL
+model: moonshotai/Kimi-K2.5
+temperature: 0.4
+
+extra:
+  builtin_tools: [toolbox]

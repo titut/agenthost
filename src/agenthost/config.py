@@ -170,13 +170,23 @@ class AgentConfig:
 
     @property
     def system_prompt(self) -> str:
+        """Build the base system prompt using the agent's own skills folder."""
+        return self.build_system_prompt(self.skills_dir)
+
+    def build_system_prompt(self, skills_dir: Path | None = None) -> str:
+        """Build the system prompt, optionally using a different skills directory.
+
+        ``skills_dir`` is used by the toolbox feature so that the active
+        toolbox's skills can be shown in the Available Skills section instead of
+        the agent's base skills.
+        """
         parts: list[str] = []
         if self.whoami_path.exists():
             parts.append(self.whoami_path.read_text(encoding="utf-8"))
         else:
             parts.append("You are a helpful assistant.")
 
-        skills = self._agent_skills(self.skills_dir)
+        skills = self._agent_skills(skills_dir or self.skills_dir)
         if skills:
             skill_lines = [
                 f"- `{name}`: {description}" if description else f"- `{name}`"
