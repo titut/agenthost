@@ -235,8 +235,11 @@ def _budget_key(thread_id: str, user_message_time: str) -> str:
     return f"research_budget:{thread_id}:{user_message_time}"
 
 
+MAX_RESEARCH_CALLS_PER_TURN = 3
+
+
 def _has_research_budget(thread_id: str) -> bool:
-    """Return True if the current user turn has not yet used its research budget."""
+    """Return True if the current user turn has research calls remaining."""
     db_path = _memory_db_path()
     if db_path is None or not db_path.exists():
         return True
@@ -248,7 +251,11 @@ def _has_research_budget(thread_id: str) -> bool:
         conn = sqlite3.connect(str(db_path))
         try:
             row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
-            return row is None
+            if row is None:
+                return True
+            data = json.loads(row[0])
+            calls_used = data.get("calls_used", 0)
+            return calls_used < MAX_RESEARCH_CALLS_PER_TURN
         finally:
             conn.close()
     except Exception:  # noqa: BLE001
@@ -256,7 +263,7 @@ def _has_research_budget(thread_id: str) -> bool:
 
 
 def _use_research_budget(thread_id: str) -> None:
-    """Mark the current user turn's research budget as used."""
+    """Increment the research-budget counter for the current user turn."""
     db_path = _memory_db_path()
     if db_path is None:
         return
@@ -267,15 +274,28 @@ def _use_research_budget(thread_id: str) -> None:
     try:
         conn = sqlite3.connect(str(db_path))
         try:
+            # If no record exists yet, init calls_used=1.
+            # If one exists (possibly from older boolean format), read it
+            # first so we don't clobber a counter with a fresh insert.
+            row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+            if row is None:
+                calls_used = 1
+            else:
+                try:
+                    existing = json.loads(row[0])
+                    calls_used = existing.get("calls_used", 0) + 1
+                except json.JSONDecodeError:
+                    calls_used = 1
+            payload = json.dumps(
+                {
+                    "calls_used": calls_used,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
             conn.execute(
                 "INSERT INTO kv (key, value) VALUES (?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (
-                    key,
-                    json.dumps(
-                        {"used": True, "at": datetime.now(timezone.utc).isoformat()}
-                    ),
-                ),
+                (key, payload),
             )
             conn.commit()
         finally:
@@ -370,8 +390,8 @@ async def research_query(question: str, plan: list[str]) -> dict[str, Any]:
 
     This is the only search tool the researcher toolbox exposes. It accepts a
     list of 1 to 5 search queries, runs them all in one call, and returns the
-    top-ranked passages combined from every query. It can be called at most once
-    per user turn.
+    top-ranked passages combined from every query. Can be called up to
+    MAX_RESEARCH_CALLS_PER_TURN (3) times per user turn.
 
     Args:
         question: The original user question being answered.
@@ -396,8 +416,9 @@ async def research_query(question: str, plan: list[str]) -> dict[str, Any]:
     if not _has_research_budget(thread_id):
         return {
             "error": (
-                "You have already used your research budget for this turn. "
-                "Stop searching and synthesize an answer from the information you already have."
+                f"You have used all {MAX_RESEARCH_CALLS_PER_TURN} research calls "
+                "for this turn. Stop searching and synthesize an answer from "
+                "the information you already have."
             )
         }
 
