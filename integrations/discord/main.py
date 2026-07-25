@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -92,8 +93,6 @@ LEVELS = ["silent", "error", "warn", "info", "debug", "trace"]
 
 def log(level: str, message: str, *args: Any) -> None:
     if LEVELS.index(level) <= LEVELS.index(LOG_LEVEL):
-        import time
-
         prefix = f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] [{level.upper()}] [discord-bridge]"
         print(f"{prefix} {message}", *args, flush=True)
 
