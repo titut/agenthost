@@ -19,6 +19,7 @@ from agenthost.config import AgentConfig
 from agenthost.events import load_events, run_scheduled_event
 from agenthost.logger import setup_logging
 from agenthost.registry import register_agent, unregister_agent
+from agenthost.toolbox import get_toolboxes_root, list_toolboxes
 
 logger = setup_logging("agenthost.server")
 
@@ -315,6 +316,15 @@ def serve(config: AgentConfig) -> None:
         scheduled_count,
         config.name,
         file_timezone or "local",
+    )
+
+    toolboxes_root = get_toolboxes_root(config.toolboxes_dir)
+    available_toolboxes = list_toolboxes(config.toolboxes_dir)
+    logger.info(
+        "Toolboxes directory: %s (%d found: %s)",
+        toolboxes_root,
+        len(available_toolboxes),
+        ", ".join(available_toolboxes) if available_toolboxes else "<none>",
     )
 
     app = build_app(agent, scheduler)

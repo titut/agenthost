@@ -82,6 +82,7 @@ uploads/
 # --- ignored agents ---
 entries/
 agents_personal
+agents/BEVABAN_GENERAL
 
 # --- ignored toolboxes ---
-toolboxes/mail_service
+toolboxes/bevaban
