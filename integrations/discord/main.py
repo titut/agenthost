@@ -8,6 +8,7 @@ Also exposes an outbound /send endpoint so the agent can push messages and
 optional file attachments to Discord channels or users via the send_discord
 built-in tool.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -55,9 +56,7 @@ BRIDGE_HTTP_PORT = int(os.environ.get("BRIDGE_HTTP_PORT", "9002"), 10)
 # Comma-separated list of Discord user IDs allowed to use this bot.
 # If empty, all users are allowed. User IDs are numeric and stable.
 ALLOWED_USER_IDS = {
-    u.strip()
-    for u in os.environ.get("ALLOWED_USER_IDS", "").split(",")
-    if u.strip()
+    u.strip() for u in os.environ.get("ALLOWED_USER_IDS", "").split(",") if u.strip()
 }
 
 # Optional: restrict guild responses to specific guilds and/or channels.
@@ -111,7 +110,10 @@ async def check_agent_health() -> dict[str, Any]:
             return data
         except Exception as exc:
             log("error", f"Agent health check failed: {exc}")
-            log("error", f"Make sure the agent is running and reachable at {AGENT_CHAT_URL}")
+            log(
+                "error",
+                f"Make sure the agent is running and reachable at {AGENT_CHAT_URL}",
+            )
             raise
 
 
@@ -168,7 +170,10 @@ async def clear_agents_for_thread(thread_id: str) -> tuple[int, list[str], list[
                 resp.raise_for_status()
                 cleared.append(name)
         except Exception as exc:
-            log("warn", f"Failed to clear agent '{name}' for thread '{thread_id}': {exc}")
+            log(
+                "warn",
+                f"Failed to clear agent '{name}' for thread '{thread_id}': {exc}",
+            )
             failed.append(name)
     return len(active), cleared, failed
 
@@ -201,7 +206,10 @@ async def stream_agent_events(
                     headers={"Accept": "text/event-stream"},
                     timeout=300.0,
                 ) as response:
-                    log("debug", f"<- agent HTTP {response.status_code} (attempt {attempt})")
+                    log(
+                        "debug",
+                        f"<- agent HTTP {response.status_code} (attempt {attempt})",
+                    )
                     response.raise_for_status()
 
                     current_event: str | None = None
@@ -229,28 +237,43 @@ async def stream_agent_events(
                                     log("debug", f"Failed to parse SSE data: {data}")
                                     continue
                                 event_type = event.get("type")
-                                if event_type == "content" and isinstance(event.get("data"), str):
+                                if event_type == "content" and isinstance(
+                                    event.get("data"), str
+                                ):
                                     yield {"type": "content", "data": event["data"]}
-                                elif event_type == "tool_start" and isinstance(event.get("data"), dict):
+                                elif event_type == "tool_start" and isinstance(
+                                    event.get("data"), dict
+                                ):
                                     payload = event["data"]
                                     yield {
                                         "type": "tool_start",
                                         "name": payload.get("name", "tool"),
                                         "arguments": payload.get("arguments", {}),
                                     }
-                                elif event_type == "tool_result" and isinstance(event.get("data"), dict):
+                                elif event_type == "tool_result" and isinstance(
+                                    event.get("data"), dict
+                                ):
                                     payload = event["data"]
                                     yield {
                                         "type": "tool_result",
                                         "name": payload.get("name", "tool"),
                                         "result": payload.get("result", ""),
                                     }
-                                elif event_type == "tool_error" and isinstance(event.get("data"), dict):
+                                elif event_type == "tool_error" and isinstance(
+                                    event.get("data"), dict
+                                ):
                                     payload = event["data"]
                                     yield {
                                         "type": "tool_error",
                                         "name": payload.get("name", "tool"),
                                         "error": payload.get("error", ""),
+                                    }
+                                elif event_type == "thinking" and isinstance(
+                                    event.get("data"), str
+                                ):
+                                    yield {
+                                        "type": "thinking",
+                                        "data": event["data"],
                                     }
                             elif current_event == "heartbeat":
                                 log("trace", "Agent heartbeat received")
@@ -263,7 +286,9 @@ async def stream_agent_events(
                     return
         except Exception as exc:
             last_error = exc
-            log("warn", f"Agent request attempt {attempt}/{AGENT_RETRIES} failed: {exc}")
+            log(
+                "warn", f"Agent request attempt {attempt}/{AGENT_RETRIES} failed: {exc}"
+            )
             if attempt < AGENT_RETRIES:
                 log("info", f"Retrying in {AGENT_RETRY_DELAY}s...")
                 await asyncio.sleep(AGENT_RETRY_DELAY)
@@ -315,6 +340,67 @@ def _format_tool_args(args: dict[str, Any], max_value_len: int = 1000) -> str:
     if len(args_str) > 1500:
         args_str = args_str[:1500].rstrip() + "..."
     return args_str
+
+
+def _format_tool_notification(name: str, args: dict[str, Any]) -> str | None:
+    """Build a Discord message showing tool call with beautified JSON arguments.
+
+    Returns ``None`` if no output should be sent (empty tool call with no args).
+    """
+    # Beautify arguments as indented JSON, but keep it under control
+    args_json = json.dumps(args, indent=2, default=str) if args else ""
+    # Truncate JSON if it's excessively long (500 chars should fit nicely)
+    if len(args_json) > 500:
+        args_json = args_json[:500].rstrip() + "\n...\n```"
+
+    lines: list[str] = []
+    lines.append(f"**Using tool:** `{name}()`")
+    if args_json:
+        lines.append("```json")
+        lines.append(args_json)
+        lines.append("```")
+    return "\n".join(lines)
+
+
+def _format_tool_result(name: str, result: str) -> str | None:
+    """Build a Discord message showing tool result with beautified JSON.
+
+    Tries to pretty-print the result if it is valid JSON; otherwise shows
+    the raw text. Returns ``None`` if the result is empty.
+    """
+    if not result:
+        return None
+
+    display = result
+    try:
+        # Only pretty-print if it's a valid JSON object/array worth showing
+        payload = json.loads(result)
+        if isinstance(payload, (dict, list)):
+            formatted = json.dumps(payload, indent=2, default=str)
+            if len(formatted) <= 1000:
+                display = formatted
+    except json.JSONDecodeError:
+        pass
+
+    # Truncate long results
+    if len(display) > 500:
+        display = display[:500].rstrip() + "\n...\n```"
+
+    lines: list[str] = []
+    lines.append(f"**✅ Tool `{name}` returned:**")
+    if (
+        display != result
+        or display.strip().startswith("{")
+        or display.strip().startswith("[")
+    ):
+        lines.append("```json")
+        lines.append(display)
+        lines.append("```")
+    else:
+        lines.append("```")
+        lines.append(display)
+        lines.append("```")
+    return "\n".join(lines)
 
 
 def truncate_message(text: str, limit: int = MAX_MESSAGE_LENGTH) -> str:
@@ -434,7 +520,10 @@ async def on_message(message: discord.Message) -> None:
 
     # Access control by user ID.
     if ALLOWED_USER_IDS and str(message.author.id) not in ALLOWED_USER_IDS:
-        log("warn", f"Ignoring message from unauthorized user {message.author} (id={message.author.id})")
+        log(
+            "warn",
+            f"Ignoring message from unauthorized user {message.author} (id={message.author.id})",
+        )
         return
 
     if isinstance(message.channel, discord.DMChannel):
@@ -467,11 +556,17 @@ async def handle_guild_message(message: discord.Message) -> None:
         return
 
     if ALLOWED_GUILD_IDS and message.guild.id not in ALLOWED_GUILD_IDS:
-        log("debug", f"Ignoring message from guild {message.guild.id} (not in allowlist)")
+        log(
+            "debug",
+            f"Ignoring message from guild {message.guild.id} (not in allowlist)",
+        )
         return
 
     if ALLOWED_CHANNEL_IDS and message.channel.id not in ALLOWED_CHANNEL_IDS:
-        log("debug", f"Ignoring message from channel {message.channel.id} (not in allowlist)")
+        log(
+            "debug",
+            f"Ignoring message from channel {message.channel.id} (not in allowlist)",
+        )
         return
 
     mentioned = bot.user in message.mentions
@@ -539,9 +634,7 @@ async def build_prompt_with_attachments(
                 tmp.write(data)
                 tmp_path = Path(tmp.name)
 
-            original_rel = await asyncio.to_thread(
-                save_upload, tmp_path, filename
-            )
+            original_rel = await asyncio.to_thread(save_upload, tmp_path, filename)
             tmp_path.unlink(missing_ok=True)
 
             preamble_lines.append(f"User uploaded: {original_rel}")
@@ -607,6 +700,52 @@ async def process_agent_request(
     content_buffer = ""
     sent_something = False
 
+    thinking_buffer: str = ""
+    thinking_message: discord.Message | None = None
+    _last_thinking_flush: float = 0.0
+
+    async def flush_thinking(*, force: bool = False) -> None:
+        """Send or edit the thinking message with the current buffer content.
+
+        Throttles updates to at most once per second to avoid spamming
+        Discord's API. When ``force`` is True the update happens immediately
+        regardless of the throttle.
+        """
+        nonlocal thinking_buffer, thinking_message, _last_thinking_flush, sent_something
+        if not thinking_buffer:
+            return
+        now = time.monotonic()
+        if not force and now - _last_thinking_flush < 1.0:
+            return
+        _last_thinking_flush = now
+
+        text = f"🧠 **Thinking…**\n```\n{thinking_buffer}\n```"
+        # Trim to fit within Discord's 2000-char limit. When the buffer
+        # overflows, show the most recent thinking (the tail) and drop the
+        # oldest content so the user always sees what the model is currently
+        # reasoning about.
+        if len(text) > MAX_MESSAGE_LENGTH - 100:
+            available = MAX_MESSAGE_LENGTH - 200  # leave room for markers
+            trimmed = thinking_buffer[-available:].lstrip()
+            text = f"🧠 **Thinking…**\n```\n{trimmed}\n```"
+        if thinking_message is not None:
+            try:
+                await thinking_message.edit(content=text)
+            except Exception:
+                # Message may have been deleted; send a new one.
+                thinking_message = await channel.send(text)
+                sent_something = True
+        else:
+            thinking_message = await channel.send(text)
+            sent_something = True
+
+    async def finalize_thinking() -> None:
+        """Flush and finalize the thinking message so it is no longer updated."""
+        nonlocal thinking_message
+        if thinking_message is not None:
+            await flush_thinking(force=True)
+        thinking_message = None
+
     async def flush_buffer(force: bool = False) -> None:
         nonlocal content_buffer, sent_something
         content_buffer = content_buffer.strip()
@@ -631,41 +770,50 @@ async def process_agent_request(
             async for event in stream_agent_events(thread_id, prompt):
                 event_type = event.get("type")
 
-                if event_type == "content":
+                if event_type == "thinking":
+                    thinking_buffer += event.get("data", "")
+                    await flush_thinking()
+
+                elif event_type == "content":
+                    await finalize_thinking()
                     content_buffer += event.get("data", "")
                     await flush_buffer()
 
                 elif event_type == "tool_start":
+                    await finalize_thinking()
                     await flush_buffer(force=True)
                     name = event.get("name", "tool")
                     args = event.get("arguments", {})
-                    args_str = _format_tool_args(args)
-                    tool_msg = f"🔧 **Using tool:** `{name}({args_str})`"
-                    truncated = truncate_message(tool_msg, limit=MAX_MESSAGE_LENGTH - 100)
-                    if truncated and await safe_send(channel, truncated):
+                    tool_msg = _format_tool_notification(name, args)
+                    if tool_msg and await safe_send(channel, tool_msg):
                         sent_something = True
 
                 elif event_type == "tool_result":
+                    await finalize_thinking()
+                    await flush_buffer(force=True)
                     name = event.get("name", "tool")
                     result = str(event.get("result", ""))
-                    # Only notify completion; the actual result is left for the
-                    # agent's content message so it doesn't spam long tool output.
-                    summary = result[:80].replace("\n", " ")
-                    if len(result) > 80:
-                        summary += "..."
-                    if await safe_send(channel, f"✅ **Tool `{name}` finished:** {summary}"):
+                    tool_msg = _format_tool_result(name, result)
+                    if tool_msg and await safe_send(channel, tool_msg):
                         sent_something = True
 
                 elif event_type == "tool_error":
+                    await finalize_thinking()
                     await flush_buffer(force=True)
                     name = event.get("name", "tool")
                     error = str(event.get("error", ""))[:200]
-                    if await safe_send(channel, f"❌ **Tool `{name}` failed:** {error}"):
+                    if await safe_send(
+                        channel, f"❌ **Tool `{name}` failed:** {error}"
+                    ):
                         sent_something = True
 
                 elif event_type == "error":
+                    await finalize_thinking()
                     await flush_buffer(force=True)
-                    if await safe_send(channel, f"❌ **Agent error:** {event.get('data', 'unknown error')}"):
+                    if await safe_send(
+                        channel,
+                        f"❌ **Agent error:** {event.get('data', 'unknown error')}",
+                    ):
                         sent_something = True
 
                 elif event_type == "done":
@@ -683,7 +831,9 @@ async def process_agent_request(
         await safe_send(channel, "⏹️ Agent stopped.")
     except Exception as exc:
         log("error", f"Failed to handle message: {exc}")
-        await safe_send(channel, "Sorry, I couldn't process that. Please try again in a moment.")
+        await safe_send(
+            channel, "Sorry, I couldn't process that. Please try again in a moment."
+        )
     finally:
         # Nothing to clean up here; run_agent_request_task manages active_tasks.
         pass
@@ -705,13 +855,17 @@ def start_outbound_server() -> aiohttp.web.Application:
         file_path = data.get("file_path")
 
         if not isinstance(text, str):
-            return aiohttp.web.json_response({"error": "text must be a string"}, status=400)
+            return aiohttp.web.json_response(
+                {"error": "text must be a string"}, status=400
+            )
         if thread_id is None:
             return aiohttp.web.json_response({"error": "missing thread_id"}, status=400)
         if isinstance(thread_id, int):
             thread_id = str(thread_id)
         if not isinstance(thread_id, str):
-            return aiohttp.web.json_response({"error": "thread_id must be a string or integer"}, status=400)
+            return aiohttp.web.json_response(
+                {"error": "thread_id must be a string or integer"}, status=400
+            )
         if not text and not file_path:
             return aiohttp.web.json_response(
                 {"error": "must provide text or file_path"}, status=400
@@ -720,26 +874,38 @@ def start_outbound_server() -> aiohttp.web.Application:
         try:
             channel_id = int(thread_id)
         except ValueError:
-            return aiohttp.web.json_response({"error": "thread_id must be a channel ID"}, status=400)
+            return aiohttp.web.json_response(
+                {"error": "thread_id must be a channel ID"}, status=400
+            )
 
         resolved_file: Path | None = None
         if file_path:
             if not isinstance(file_path, str):
-                return aiohttp.web.json_response({"error": "file_path must be a string"}, status=400)
+                return aiohttp.web.json_response(
+                    {"error": "file_path must be a string"}, status=400
+                )
             home = get_agenthost_home()
             target = Path(file_path)
-            resolved = target.resolve() if target.is_absolute() else (home / target).resolve()
+            resolved = (
+                target.resolve() if target.is_absolute() else (home / target).resolve()
+            )
             try:
                 resolved.relative_to(home)
             except ValueError:
                 return aiohttp.web.json_response(
-                    {"error": f"Access denied: '{file_path}' resolves outside the agenthost home directory."},
+                    {
+                        "error": f"Access denied: '{file_path}' resolves outside the agenthost home directory."
+                    },
                     status=403,
                 )
             if not resolved.exists():
-                return aiohttp.web.json_response({"error": f"file not found: {file_path}"}, status=404)
+                return aiohttp.web.json_response(
+                    {"error": f"file not found: {file_path}"}, status=404
+                )
             if not resolved.is_file():
-                return aiohttp.web.json_response({"error": f"path is not a file: {file_path}"}, status=400)
+                return aiohttp.web.json_response(
+                    {"error": f"path is not a file: {file_path}"}, status=400
+                )
             resolved_file = resolved
 
         try:
@@ -747,7 +913,9 @@ def start_outbound_server() -> aiohttp.web.Application:
         except discord.NotFound:
             return aiohttp.web.json_response({"error": "channel not found"}, status=404)
         except discord.Forbidden:
-            return aiohttp.web.json_response({"error": "cannot access channel"}, status=403)
+            return aiohttp.web.json_response(
+                {"error": "cannot access channel"}, status=403
+            )
         except Exception as exc:
             log("error", f"Failed to fetch channel {channel_id}: {exc}")
             return aiohttp.web.json_response({"error": str(exc)}, status=500)
@@ -760,11 +928,16 @@ def start_outbound_server() -> aiohttp.web.Application:
                     await channel.send(truncated, file=file_obj)
                 else:
                     await channel.send(file=file_obj)
-                log("info", f"Outbound /send file to channel {channel_id}: {resolved_file}")
+                log(
+                    "info",
+                    f"Outbound /send file to channel {channel_id}: {resolved_file}",
+                )
             else:
                 truncated = truncate_message(text, limit=MAX_MESSAGE_LENGTH - 100)
                 if not truncated:
-                    return aiohttp.web.json_response({"error": "empty message"}, status=400)
+                    return aiohttp.web.json_response(
+                        {"error": "empty message"}, status=400
+                    )
                 await channel.send(truncated)
                 log("info", f"Outbound /send to channel {channel_id}: {text[:80]}")
             return aiohttp.web.json_response({"ok": True, "thread_id": thread_id})
@@ -795,34 +968,48 @@ def start_outbound_server() -> aiohttp.web.Application:
         message_id = data.get("message_id")
 
         if not isinstance(text, str):
-            return aiohttp.web.json_response({"error": "text must be a string"}, status=400)
+            return aiohttp.web.json_response(
+                {"error": "text must be a string"}, status=400
+            )
         if thread_id is None:
             return aiohttp.web.json_response({"error": "missing thread_id"}, status=400)
         if message_id is None:
-            return aiohttp.web.json_response({"error": "missing message_id"}, status=400)
+            return aiohttp.web.json_response(
+                {"error": "missing message_id"}, status=400
+            )
         if isinstance(thread_id, int):
             thread_id = str(thread_id)
         if not isinstance(thread_id, str):
-            return aiohttp.web.json_response({"error": "thread_id must be a string or integer"}, status=400)
+            return aiohttp.web.json_response(
+                {"error": "thread_id must be a string or integer"}, status=400
+            )
         if isinstance(message_id, int):
             message_id = str(message_id)
         if not isinstance(message_id, str):
-            return aiohttp.web.json_response({"error": "message_id must be a string or integer"}, status=400)
+            return aiohttp.web.json_response(
+                {"error": "message_id must be a string or integer"}, status=400
+            )
         if not text:
-            return aiohttp.web.json_response({"error": "text must be non-empty"}, status=400)
+            return aiohttp.web.json_response(
+                {"error": "text must be non-empty"}, status=400
+            )
 
         try:
             channel_id = int(thread_id)
             msg_id = int(message_id)
         except ValueError:
-            return aiohttp.web.json_response({"error": "thread_id and message_id must be valid integers"}, status=400)
+            return aiohttp.web.json_response(
+                {"error": "thread_id and message_id must be valid integers"}, status=400
+            )
 
         try:
             channel = await bot.fetch_channel(channel_id)
         except discord.NotFound:
             return aiohttp.web.json_response({"error": "channel not found"}, status=404)
         except discord.Forbidden:
-            return aiohttp.web.json_response({"error": "cannot access channel"}, status=403)
+            return aiohttp.web.json_response(
+                {"error": "cannot access channel"}, status=403
+            )
         except Exception as exc:
             log("error", f"Failed to fetch channel {channel_id}: {exc}")
             return aiohttp.web.json_response({"error": str(exc)}, status=500)
@@ -832,9 +1019,14 @@ def start_outbound_server() -> aiohttp.web.Application:
         except discord.NotFound:
             return aiohttp.web.json_response({"error": "message not found"}, status=404)
         except discord.Forbidden:
-            return aiohttp.web.json_response({"error": "cannot access message"}, status=403)
+            return aiohttp.web.json_response(
+                {"error": "cannot access message"}, status=403
+            )
         except Exception as exc:
-            log("error", f"Failed to fetch message {msg_id} in channel {channel_id}: {exc}")
+            log(
+                "error",
+                f"Failed to fetch message {msg_id} in channel {channel_id}: {exc}",
+            )
             return aiohttp.web.json_response({"error": str(exc)}, status=500)
 
         try:
@@ -843,7 +1035,9 @@ def start_outbound_server() -> aiohttp.web.Application:
                 return aiohttp.web.json_response({"error": "empty message"}, status=400)
             await message.edit(content=truncated)
             log("info", f"Outbound /edit message {msg_id} in channel {channel_id}")
-            return aiohttp.web.json_response({"ok": True, "thread_id": thread_id, "message_id": message_id})
+            return aiohttp.web.json_response(
+                {"ok": True, "thread_id": thread_id, "message_id": message_id}
+            )
         except discord.HTTPException as exc:
             detail = getattr(exc, "text", str(exc))
             log(
@@ -897,7 +1091,10 @@ async def main() -> None:
     await runner.setup()
     site = aiohttp.web.TCPSite(runner, BRIDGE_HTTP_HOST, BRIDGE_HTTP_PORT)
     await site.start()
-    log("info", f"Outbound server listening on http://{BRIDGE_HTTP_HOST}:{BRIDGE_HTTP_PORT}/send and /edit")
+    log(
+        "info",
+        f"Outbound server listening on http://{BRIDGE_HTTP_HOST}:{BRIDGE_HTTP_PORT}/send and /edit",
+    )
 
     try:
         await bot.start(BOT_TOKEN)

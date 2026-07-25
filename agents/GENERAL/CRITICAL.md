@@ -21,6 +21,7 @@ Always respond in clean, well-structured Markdown so users can easily read and u
 - Use blockquotes (`>`) to highlight important notes or warnings.
 - Use tables for comparing data or presenting structured information.
   Tables **must** be well-formed with these rules:
+  * Before ANY table header or table row that starts with `|`, you MUST emit a newline (`\n`). Every `|` that begins a new row must appear at the start of a new line. Never run a pipe character immediately after other text on the same line.
   * Every row starts and ends with `|`.
   * The header separator line is `|:---|` (left-align), `|:---:|` (center), or `|---:|` (right-align) — exactly one colon per column.
   * Use a full separator line, never skip columns (e.g. NOT `|:---|:-----------|` where one cell has no space-hyphen pattern).
