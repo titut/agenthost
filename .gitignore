@@ -82,3 +82,6 @@ uploads/
 # --- ignored agents ---
 entries/
 agents_personal
+
+# --- ignored toolboxes ---
+toolboxes/mail_service
