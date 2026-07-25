@@ -699,52 +699,6 @@ async def process_agent_request(
     content_buffer = ""
     sent_something = False
 
-    thinking_buffer: str = ""
-    thinking_message: discord.Message | None = None
-    _last_thinking_flush: float = 0.0
-
-    async def flush_thinking(*, force: bool = False) -> None:
-        """Send or edit the thinking message with the current buffer content.
-
-        Throttles updates to at most once per second to avoid spamming
-        Discord's API. When ``force`` is True the update happens immediately
-        regardless of the throttle.
-        """
-        nonlocal thinking_buffer, thinking_message, _last_thinking_flush, sent_something
-        if not thinking_buffer:
-            return
-        now = time.monotonic()
-        if not force and now - _last_thinking_flush < 1.0:
-            return
-        _last_thinking_flush = now
-
-        text = f"🧠 **Thinking…**\n```\n{thinking_buffer}\n```"
-        # Trim to fit within Discord's 2000-char limit. When the buffer
-        # overflows, show the most recent thinking (the tail) and drop the
-        # oldest content so the user always sees what the model is currently
-        # reasoning about.
-        if len(text) > MAX_MESSAGE_LENGTH - 100:
-            available = MAX_MESSAGE_LENGTH - 200  # leave room for markers
-            trimmed = thinking_buffer[-available:].lstrip()
-            text = f"🧠 **Thinking…**\n```\n{trimmed}\n```"
-        if thinking_message is not None:
-            try:
-                await thinking_message.edit(content=text)
-            except Exception:
-                # Message may have been deleted; send a new one.
-                thinking_message = await channel.send(text)
-                sent_something = True
-        else:
-            thinking_message = await channel.send(text)
-            sent_something = True
-
-    async def finalize_thinking() -> None:
-        """Flush and finalize the thinking message so it is no longer updated."""
-        nonlocal thinking_message
-        if thinking_message is not None:
-            await flush_thinking(force=True)
-        thinking_message = None
-
     async def flush_buffer(force: bool = False) -> None:
         nonlocal content_buffer, sent_something
         content_buffer = content_buffer.strip()
@@ -770,16 +724,15 @@ async def process_agent_request(
                 event_type = event.get("type")
 
                 if event_type == "thinking":
-                    thinking_buffer += event.get("data", "")
-                    await flush_thinking()
+                    # Silently accumulate thinking content; it is not shown
+                    # in Discord to avoid cluttering the chat.
+                    pass
 
                 elif event_type == "content":
-                    await finalize_thinking()
                     content_buffer += event.get("data", "")
                     await flush_buffer()
 
                 elif event_type == "tool_start":
-                    await finalize_thinking()
                     await flush_buffer(force=True)
                     name = event.get("name", "tool")
                     args = event.get("arguments", {})
@@ -788,7 +741,6 @@ async def process_agent_request(
                         sent_something = True
 
                 elif event_type == "tool_result":
-                    await finalize_thinking()
                     await flush_buffer(force=True)
                     name = event.get("name", "tool")
                     result = str(event.get("result", ""))
@@ -797,7 +749,6 @@ async def process_agent_request(
                         sent_something = True
 
                 elif event_type == "tool_error":
-                    await finalize_thinking()
                     await flush_buffer(force=True)
                     name = event.get("name", "tool")
                     error = str(event.get("error", ""))[:200]
@@ -807,7 +758,6 @@ async def process_agent_request(
                         sent_something = True
 
                 elif event_type == "error":
-                    await finalize_thinking()
                     await flush_buffer(force=True)
                     if await safe_send(
                         channel,
