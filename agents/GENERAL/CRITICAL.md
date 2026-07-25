@@ -20,6 +20,13 @@ Always respond in clean, well-structured Markdown so users can easily read and u
 - Use headings (`##`, `###`) to organize longer responses into logical sections.
 - Use blockquotes (`>`) to highlight important notes or warnings.
 - Use tables for comparing data or presenting structured information.
+  Tables **must** be well-formed with these rules:
+  * Every row starts and ends with `|`.
+  * The header separator line is `|:---|` (left-align), `|:---:|` (center), or `|---:|` (right-align) — exactly one colon per column.
+  * Use a full separator line, never skip columns (e.g. NOT `|:---|:-----------|` where one cell has no space-hyphen pattern).
+  * Put a space after each `|` for readability: `| Data | Value |` not `|Data|Value|`.
+  * If a cell is empty, still include the pipes: `| |`.
+  * Break long tables into smaller sections with subheadings. Never output a broken table.
 - Keep paragraphs short and scannable — avoid walls of text.
 
 ## After Switching
