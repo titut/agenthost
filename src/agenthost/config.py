@@ -133,6 +133,7 @@ class AgentConfig:
     frequency_penalty: float | None = DEFAULT_CONFIG["frequency_penalty"]
     presence_penalty: float | None = DEFAULT_CONFIG["presence_penalty"]
     orchestrator: bool = DEFAULT_CONFIG["orchestrator"]
+    toolboxes_dir: Path | None = None
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     extra: dict[str, Any] = field(default_factory=dict)
@@ -411,6 +412,16 @@ class AgentConfig:
 
         name = config.pop("name", p.name)
 
+        # Optional custom toolboxes directory. Relative paths are resolved against
+        # the agent package directory so agent.yaml stays portable.
+        toolboxes_dir_raw = config.pop("toolboxes_dir", None)
+        toolboxes_dir = None
+        if toolboxes_dir_raw:
+            toolboxes_dir_path = Path(toolboxes_dir_raw).expanduser()
+            if not toolboxes_dir_path.is_absolute():
+                toolboxes_dir_path = p / toolboxes_dir_path
+            toolboxes_dir = toolboxes_dir_path.resolve()
+
         # Parse nested embedding/memory config blocks. Embedding base_url defaults
         # to the agent's base_url so the same provider can be used out of the box.
         embedding_cfg = config.pop("embedding", None) or {}
@@ -462,6 +473,7 @@ class AgentConfig:
                 "frequency_penalty",
                 "presence_penalty",
                 "orchestrator",
+                "toolboxes_dir",
             }
         }
         extra.update(explicit_extra)
@@ -493,6 +505,7 @@ class AgentConfig:
                 float(presence_penalty) if presence_penalty is not None else None
             ),
             orchestrator=orchestrator,
+            toolboxes_dir=toolboxes_dir,
             embedding=embedding,
             memory=memory,
             extra=extra,

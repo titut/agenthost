@@ -14,6 +14,7 @@ frequency_penalty: 0.0  # Optional: penalize repeated tokens (-2.0 to 2.0)
 presence_penalty: 0.0   # Optional: penalize repeated topics (-2.0 to 2.0)
 thinking: null          # Optional: reasoning effort for supported models (e.g., high)
 orchestrator: false
+toolboxes_dir: ./toolboxes  # Optional: custom toolboxes directory (absolute or relative to agent.yaml)
 
 embedding:
   model: BAAI/bge-m3

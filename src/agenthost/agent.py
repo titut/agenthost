@@ -151,9 +151,9 @@ class Agent:
         if not validate_toolbox_name(name):
             return json.dumps({"error": f"Invalid toolbox name '{name}'."})
 
-        toolbox_path = get_toolboxes_root() / name
+        toolbox_path = get_toolboxes_root(self.config.toolboxes_dir) / name
         if not toolbox_path.exists():
-            available = list_toolboxes()
+            available = list_toolboxes(self.config.toolboxes_dir)
             return json.dumps(
                 {
                     "error": f"Toolbox '{name}' not found.",

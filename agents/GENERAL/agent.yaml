@@ -2,6 +2,7 @@ name: GENERAL
 model: moonshotai/Kimi-K2.5
 temperature: 0.4
 port: 8500
+toolboxes_dir: /home/koroko/Workspace/agenthost/toolboxes
 
 extra:
   builtin_tools: [toolbox, events, discord]

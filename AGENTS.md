@@ -245,7 +245,7 @@ If you add new agent tools, test them by running the agent locally and invoking 
 
 ### Add a new toolbox
 
-1. Create a directory under `toolboxes/<name>/`.
+1. Create a directory under `toolboxes/<name>/` (or a custom location configured in `agent.yaml`).
 2. Add Python tools under `tools/` (top-level `async def` or `def` functions only).
 3. Add markdown skills under `skills/` if needed; each skill should contain a `# Description` section.
 4. Restart the agent server if it is already running (toolbox discovery is dynamic, but the list of valid toolbox names is checked at switch time).
@@ -256,7 +256,13 @@ If you add new agent tools, test them by running the agent locally and invoking 
      builtin_tools: [toolbox]
    ```
 
-6. From a chat session, call `toolbox(action="switch", target="<name>")` to activate it, `toolbox(action="list")` to see available toolboxes, or `toolbox(action="list", target="<name>")` to inspect a specific toolbox's tools and skills.
+6. Optional: if your toolboxes live outside the default `toolboxes/` folder, set `toolboxes_dir` in `agent.yaml` (absolute path or relative to the agent package):
+
+   ```yaml
+   toolboxes_dir: /path/to/custom/toolboxes
+   ```
+
+7. From a chat session, call `toolbox(action="switch", target="<name>")` to activate it, `toolbox(action="list")` to see available toolboxes, or `toolbox(action="list", target="<name>")` to inspect a specific toolbox's tools and skills.
 
 ### Change the default model or provider
 

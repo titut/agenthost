@@ -538,17 +538,17 @@ class ToolboxTools:
 
         if action == "list":
             if not target:
-                return json.dumps({"toolboxes": list_toolboxes()})
+                return json.dumps({"toolboxes": list_toolboxes(self.config.toolboxes_dir)})
 
             if not validate_toolbox_name(target):
                 return json.dumps({"error": f"Invalid toolbox name '{target}'."})
 
-            toolbox_path = get_toolboxes_root() / target
+            toolbox_path = get_toolboxes_root(self.config.toolboxes_dir) / target
             if not toolbox_path.exists():
                 return json.dumps(
                     {
                         "error": f"Toolbox '{target}' not found.",
-                        "available": list_toolboxes(),
+                        "available": list_toolboxes(self.config.toolboxes_dir),
                     }
                 )
 

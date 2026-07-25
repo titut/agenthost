@@ -8,19 +8,17 @@ keeping the same memory and conversation state.
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
 import agenthost
 
 
-def get_toolboxes_root() -> Path:
+def get_toolboxes_root(toolboxes_dir: Path | None = None) -> Path:
     """Return the project ``toolboxes/`` directory.
 
     Resolution order:
-    1. ``AGENTHOST_TOOLBOXES`` environment variable (absolute path or relative
-       to the current working directory).
+    1. ``toolboxes_dir`` if provided (e.g. from ``agent.yaml``).
     2. ``toolboxes/`` under the current working directory, if it exists.
     3. ``toolboxes/`` next to the installed agenthost package (derived from
        ``agenthost.__file__``).
@@ -28,20 +26,15 @@ def get_toolboxes_root() -> Path:
     If the directory does not exist yet, the resolved path is still returned so
     callers can create it or report it as empty.
     """
-    # 1. Explicit override via environment variable.
-    env_override = os.environ.get("AGENTHOST_TOOLBOXES")
-    if env_override:
-        target = Path(env_override)
-        if not target.is_absolute():
-            target = Path.cwd() / target
-        return target.resolve()
+    if toolboxes_dir is not None:
+        return Path(toolboxes_dir).expanduser().resolve()
 
-    # 2. CWD-relative toolboxes/ if it exists (e.g. user is inside the repo).
+    # CWD-relative toolboxes/ if it exists (e.g. user is inside the repo).
     cwd_toolboxes = Path.cwd() / "toolboxes"
     if cwd_toolboxes.is_dir():
         return cwd_toolboxes
 
-    # 3. Package-relative fallback.
+    # Package-relative fallback.
     package_dir = Path(agenthost.__file__).resolve().parent
     project_root = package_dir.parent.parent
     return project_root / "toolboxes"
@@ -54,13 +47,13 @@ def validate_toolbox_name(name: str) -> bool:
     return bool(re.fullmatch(r"[a-zA-Z0-9_-]+", name))
 
 
-def list_toolboxes() -> list[str]:
+def list_toolboxes(toolboxes_dir: Path | None = None) -> list[str]:
     """Return the names of all valid toolbox packages under ``toolboxes/``.
 
     A directory is considered a toolbox only if it has at least a ``tools/`` or
     ``skills/`` subdirectory, so plain notes or documentation folders are ignored.
     """
-    root = get_toolboxes_root()
+    root = get_toolboxes_root(toolboxes_dir)
     if not root.exists():
         return []
 
