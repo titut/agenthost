@@ -281,7 +281,7 @@ class Agent:
                         f"({type(exc).__name__}). The conversation state may be invalid. "
                         "Try clearing the thread or rephrasing your request."
                     )
-                    yield _graceful_error(error_summary)
+                    yield await _graceful_error(error_summary)
                     break
 
                 logger.warning(
@@ -525,7 +525,7 @@ class Agent:
                         + "\n\nI stopped to avoid an API error. Try rephrasing your request, "
                         "or specify one simple action at a time."
                     )
-                    yield _graceful_error(error_summary)
+                    yield await _graceful_error(error_summary)
                     break
 
                 logger.debug(
