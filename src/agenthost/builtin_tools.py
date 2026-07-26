@@ -170,6 +170,7 @@ class EventTools:
         unit: str | None = None,
         at: str | None = None,
         enabled: bool = True,
+        fresh: bool = True,
     ) -> str:
         """Add a new scheduled event to this agent's events.yaml.
 
@@ -185,6 +186,7 @@ class EventTools:
             unit: Required for interval schedules: seconds, minutes, hours, days.
             at: Required for once schedules, ISO 8601 datetime.
             enabled: Whether the event is active.
+            fresh: When True (default), clears thread history before each run.
         """
         cfg = self._load()
         if any(e.name == name for e in cfg.events):
@@ -202,7 +204,11 @@ class EventTools:
 
         try:
             event = ScheduledEvent(
-                name=name, schedule=schedule, prompt=prompt, enabled=enabled
+                name=name,
+                schedule=schedule,
+                prompt=prompt,
+                enabled=enabled,
+                fresh=fresh,
             )
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"error": f"Invalid event: {exc}"})
@@ -222,6 +228,7 @@ class EventTools:
         unit: str | None = None,
         at: str | None = None,
         enabled: bool | None = None,
+        fresh: bool | None = None,
     ) -> str:
         """Update an existing scheduled event. Only provided fields are changed.
 
@@ -232,6 +239,7 @@ class EventTools:
                 e.g. ['monday', 'wednesday'].
             time: List of times in HH:MM or HH:MM:SS format. For multiple times,
                 pass e.g. ['09:00', '23:00'].
+            fresh: When True, clears thread history before each run.
         """
         cfg = self._load()
         event = next((e for e in cfg.events if e.name == name), None)
@@ -260,6 +268,8 @@ class EventTools:
             event.prompt = prompt
         if enabled is not None:
             event.enabled = enabled
+        if fresh is not None:
+            event.fresh = fresh
 
         self._save(cfg)
         self._reload_scheduler()
@@ -538,7 +548,9 @@ class ToolboxTools:
 
         if action == "list":
             if not target:
-                return json.dumps({"toolboxes": list_toolboxes(self.config.toolboxes_dir)})
+                return json.dumps(
+                    {"toolboxes": list_toolboxes(self.config.toolboxes_dir)}
+                )
 
             if not validate_toolbox_name(target):
                 return json.dumps({"error": f"Invalid toolbox name '{target}'."})

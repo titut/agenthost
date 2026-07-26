@@ -4,6 +4,7 @@ Each agent may define an events.yaml file describing messages to send to the
 agent on a schedule. Schedules use a structured, human-readable YAML format
 instead of cron expressions.
 """
+
 from __future__ import annotations
 
 import json
@@ -186,6 +187,12 @@ class ScheduledEvent(BaseModel):
     schedule: EventSchedule
     enabled: bool = True
     prompt: str
+    # When True (the default), the event thread's conversation history is
+    # cleared before each run. This prevents repeating events from degrading
+    # over time due to accumulating self-referential context. Set to False
+    # when the event needs to retain state across runs (e.g. tracking inbox
+    # changes over time).
+    fresh: bool = True
     # Optional thread_id inherited from the conversation where the event was
     # created. Used by scheduled runs so the agent keeps the right context
     # (e.g. the Discord channel to send messages back to).
@@ -233,7 +240,23 @@ async def run_scheduled_event(agent: "Agent", event: ScheduledEvent) -> None:
     )
     # Allow events to run in the same thread as an ongoing chat (e.g. WhatsApp)
     # by configuring event_thread_id in agent.yaml extra fields.
-    thread_id = event.thread_id or agent.config.extra.get("event_thread_id") or f"scheduled:{event.name}"
+    thread_id = (
+        event.thread_id
+        or agent.config.extra.get("event_thread_id")
+        or f"scheduled:{event.name}"
+    )
+
+    # Clear thread history before each run when fresh=True (the default).
+    # This prevents repeating events from degrading as conversation history
+    # and RAG embeddings accumulate self-referential noise over time.
+    if event.fresh:
+        agent.memory.clear_thread(thread_id)
+        logger.debug(
+            "Cleared thread '%s' for fresh event '%s'",
+            thread_id,
+            event.name,
+        )
+
     response_parts: list[str] = []
 
     try:
