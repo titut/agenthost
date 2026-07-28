@@ -83,6 +83,9 @@ uploads/
 entries/
 agents_personal
 agents/BEVABAN_GENERAL
+agents/AKAT_GENERAL
 
 # --- ignored toolboxes ---
-toolboxes/bevaban
+toolboxes_*
+# --- evolve sandbox ---
+toolbox_evolve/

@@ -1,4 +1,0 @@
-name: DOCUMENT_WRITER
-model: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
-temperature: 0.4
-thinking: medium

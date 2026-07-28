@@ -1,6 +1,0 @@
-name: RESEARCHER
-model: moonshotai/Kimi-K2.5
-temperature: 0.7
-frequency_penalty: 0.7
-presence_penalty: 0.6
-thinking: low

@@ -1,6 +1,0 @@
-name: GMAIL_AGENT
-model: moonshotai/Kimi-K2.5
-temperature: 0.3
-frequency_penalty: 0.8
-presence_penalty: 0.8
-thinking: low
