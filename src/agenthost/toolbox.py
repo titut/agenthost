@@ -41,10 +41,15 @@ def get_toolboxes_root(toolboxes_dir: Path | None = None) -> Path:
 
 
 def validate_toolbox_name(name: str) -> bool:
-    """Return True if ``name`` is a safe toolbox directory stem."""
-    if not name or len(name) > 100:
+    """Return True if ``name`` is a safe toolbox directory stem.
+
+    Names must start with a letter or digit (never underscore), be at
+    most 100 characters, and contain only letters, digits, hyphens, and
+    underscores.
+    """
+    if not name or name.startswith("_") or len(name) > 100:
         return False
-    return bool(re.fullmatch(r"[a-zA-Z0-9_-]+", name))
+    return bool(re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]*$", name))
 
 
 def list_toolboxes(toolboxes_dir: Path | None = None) -> list[str]:

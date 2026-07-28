@@ -12,7 +12,7 @@ build/
 
 # ── Virtual environments ────────────────────────────────────────────
 .venv/
-venv/
+*venv
 env/
 .env/
 
@@ -87,5 +87,3 @@ agents/AKAT_GENERAL
 
 # --- ignored toolboxes ---
 toolboxes_*
-# --- evolve sandbox ---
-toolbox_evolve/

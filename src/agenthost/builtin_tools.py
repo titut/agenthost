@@ -164,7 +164,7 @@ class EventTools:
         self,
         name: str,
         schedule_type: list[str],
-        prompt: str,
+        prompt: str | list[str],
         time: list[str] | None = None,
         every: int | None = None,
         unit: str | None = None,
@@ -179,7 +179,9 @@ class EventTools:
             schedule_type: List of schedule types. Each one of: daily, weekdays,
                 weekends, monday-sunday, interval, once. For multiple days, pass
                 e.g. ['monday', 'wednesday'].
-            prompt: Message/prompt sent to the agent when the event fires.
+            prompt: Message(s) sent to the agent when the event fires. Pass a
+                single string for one step, or a list of strings to run multiple
+                prompts one after another in the same thread.
             time: List of times in HH:MM or HH:MM:SS format. Required for day-based
                 schedules. For multiple times, pass e.g. ['09:00', '23:00'].
             every: Required for interval schedules.
@@ -222,7 +224,7 @@ class EventTools:
         self,
         name: str,
         schedule_type: list[str] | None = None,
-        prompt: str | None = None,
+        prompt: str | list[str] | None = None,
         time: list[str] | None = None,
         every: int | None = None,
         unit: str | None = None,
@@ -237,6 +239,9 @@ class EventTools:
             schedule_type: List of schedule types. Each one of: daily, weekdays,
                 weekends, monday-sunday, interval, once. For multiple days, pass
                 e.g. ['monday', 'wednesday'].
+            prompt: Message(s) sent to the agent when the event fires. Pass a
+                single string for one step, or a list of strings to run multiple
+                prompts one after another in the same thread.
             time: List of times in HH:MM or HH:MM:SS format. For multiple times,
                 pass e.g. ['09:00', '23:00'].
             fresh: When True, clears thread history before each run.
@@ -292,7 +297,7 @@ class EventTools:
         action: str,
         action_name: str | None = None,
         schedule_type: list[str] | None = None,
-        prompt: str | None = None,
+        prompt: str | list[str] | None = None,
         time: list[str] | None = None,
         every: int | None = None,
         unit: str | None = None,
@@ -307,7 +312,9 @@ class EventTools:
             schedule_type: List of schedule types. Each one of: daily, weekdays,
                 weekends, monday-sunday, interval, once. For multiple days, pass
                 e.g. ['monday', 'wednesday'].
-            prompt: Message/prompt sent to the agent when the event fires.
+            prompt: Message(s) sent to the agent when the event fires. Pass a
+                single string for one step, or a list of strings to run multiple
+                prompts one after another in the same thread.
             time: List of times in HH:MM or HH:MM:SS format. Required for day-based
                 schedules. For multiple times, pass e.g. ['09:00', '23:00'].
             every: Required for interval schedules.

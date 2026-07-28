@@ -186,7 +186,7 @@ class ScheduledEvent(BaseModel):
     name: str
     schedule: EventSchedule
     enabled: bool = True
-    prompt: str
+    prompt: str | list[str]
     # When True (the default), the event thread's conversation history is
     # cleared before each run. This prevents repeating events from degrading
     # over time due to accumulating self-referential context. Set to False
@@ -197,6 +197,13 @@ class ScheduledEvent(BaseModel):
     # created. Used by scheduled runs so the agent keeps the right context
     # (e.g. the Discord channel to send messages back to).
     thread_id: str | None = None
+
+    @field_validator("prompt", mode="before")
+    @classmethod
+    def _normalize_prompt(cls, value: Any) -> list[str]:
+        if isinstance(value, str):
+            return [value]
+        return list(value)
 
 
 class EventsConfig(BaseModel):
@@ -258,16 +265,26 @@ async def run_scheduled_event(agent: "Agent", event: ScheduledEvent) -> None:
         )
 
     response_parts: list[str] = []
+    prompts = event.prompt
 
     try:
-        async for chunk in agent.chat(thread_id, event.prompt):
-            data = json.loads(chunk)
-            if data.get("type") == "content":
-                response_parts.append(data.get("data", ""))
+        for step_index, prompt in enumerate(prompts, start=1):
+            logger.info(
+                "Running scheduled event '%s' step %d/%d for agent '%s'",
+                event.name,
+                step_index,
+                len(prompts),
+                agent.config.name,
+            )
+            async for chunk in agent.chat(thread_id, prompt):
+                data = json.loads(chunk)
+                if data.get("type") == "content":
+                    response_parts.append(data.get("data", ""))
         logger.info(
-            "Scheduled event '%s' completed (%d response chars)",
+            "Scheduled event '%s' completed (%d response chars across %d step(s))",
             event.name,
             len("".join(response_parts)),
+            len(prompts),
         )
     except Exception:
         logger.exception("Scheduled event '%s' failed", event.name)

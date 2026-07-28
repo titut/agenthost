@@ -85,3 +85,17 @@ events:
     fresh: true
     prompt: >
       Runs every day at both 09:00 and 17:00 UTC.
+
+  - name: multistep_example
+    enabled: false
+    schedule:
+      type: daily
+      time: "09:00"
+    fresh: true
+    prompt:
+      - >
+        Step 1: Check the latest messages or tasks for today.
+      - >
+        Step 2: Summarize what you found in a short paragraph.
+      - >
+        Step 3: Suggest the next action to take.
