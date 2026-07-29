@@ -311,12 +311,27 @@ def _start_discord_bridge(
 
     Loads the .env file at *env_path*, overrides AGENT_CHAT_URL to point at
     the agent just started, and runs the bridge script.
+
+    Also sets DISCORD_BRIDGE_URL in the *current* process environment so the
+    agent's send_discord tool can discover the bridge's outbound /send endpoint
+    regardless of what is hardcoded in agent.yaml.
     """
     import os as _os
 
+    dotenv_vars = _parse_dotenv(env_path)
+
     env = dict(_os.environ)
-    env.update(_parse_dotenv(env_path))
+    env.update(dotenv_vars)
     env["AGENT_CHAT_URL"] = f"http://{agent_host}:{agent_port}/chat"
+
+    # Determine the bridge's outbound HTTP port and set DISCORD_BRIDGE_URL
+    # in the current (agent) process so the send_discord built-in tool
+    # reaches the correct endpoint.
+    bridge_port = dotenv_vars.get("BRIDGE_HTTP_PORT", "9002")
+    bridge_host = dotenv_vars.get("BRIDGE_HTTP_HOST", "127.0.0.1")
+    bridge_url = f"http://{bridge_host}:{bridge_port}/send"
+    _os.environ["DISCORD_BRIDGE_URL"] = bridge_url
+    logger.info("DISCORD_BRIDGE_URL set to %s", bridge_url)
 
     # Resolve the bridge script path relative to this file.
     bridge_script = (
@@ -408,8 +423,27 @@ def serve(
     )
 
     # Start the Discord bridge before uvicorn.run blocks.
+    # Also sets DISCORD_BRIDGE_URL in os.environ and overrides the agent.yaml
+    # discord_bridge_url value so the send_discord tool reaches the correct port.
     discord_proc = None
     if discord_env_path:
+        dotenv_vars = _parse_dotenv(discord_env_path)
+        bridge_port = dotenv_vars.get("BRIDGE_HTTP_PORT", "9002")
+        bridge_host = dotenv_vars.get("BRIDGE_HTTP_HOST", "127.0.0.1")
+        bridge_url = f"http://{bridge_host}:{bridge_port}/send"
+        import os as _os
+
+        _os.environ["DISCORD_BRIDGE_URL"] = bridge_url
+        # Override agent.yaml's hardcoded value so send_discord uses the
+        # actual bridge port from the .env file.
+        config.extra["discord_bridge_url"] = bridge_url
+        logger.info(
+            "DISCORD_BRIDGE_URL set to %s (from %s BRIDGE_HTTP_HOST=%s BRIDGE_HTTP_PORT=%s)",
+            bridge_url,
+            discord_env_path,
+            bridge_host,
+            bridge_port,
+        )
         try:
             discord_proc = _start_discord_bridge(discord_env_path, config.host, port)
         except Exception as exc:
