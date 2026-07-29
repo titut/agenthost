@@ -24,7 +24,6 @@ from agenthost.secure_key import (
     load_keepass_env,
 )
 
-
 try:
     from agenthost.chat_tui import ChatApp
 except Exception:  # noqa: BLE001
@@ -41,6 +40,12 @@ def _add_serve_parser(
     parser.add_argument(
         "agent",
         help="Agent alias (from agents.yaml) or path to the agent folder containing WHOAMI.md.",
+    )
+    parser.add_argument(
+        "--discord",
+        metavar="PATH_TO_ENV",
+        default=None,
+        help="Path to a .env file for the Discord bridge. Starts the bridge as a child process.",
     )
     return parser
 
@@ -108,7 +113,10 @@ def _resolve_agent_path(alias_or_path: str) -> Path:
 
 def _do_serve(args: argparse.Namespace) -> int:
     config = AgentConfig.from_path(_resolve_agent_path(args.agent))
-    serve(config)
+    discord_env_path = args.discord
+    if discord_env_path:
+        discord_env_path = str(Path(discord_env_path).expanduser().resolve())
+    serve(config, discord_env_path=discord_env_path)
     return 0
 
 
@@ -227,10 +235,7 @@ def _do_chat(args: argparse.Namespace) -> int:
     thread_id: str | None = args.thread
 
     use_tui = (
-        not args.no_tui
-        and not args.once
-        and sys.stdin.isatty()
-        and ChatApp is not None
+        not args.no_tui and not args.once and sys.stdin.isatty() and ChatApp is not None
     )
 
     if not use_tui:
@@ -327,7 +332,9 @@ def _add_key_parser(
     # key list
     list_p = key_sub.add_parser("list", help="List all key names.")
     list_p.add_argument(
-        "--db", default=str(get_keys_db_path()), help=f"Path to .kdbx file (default: {get_keys_db_path()})"
+        "--db",
+        default=str(get_keys_db_path()),
+        help=f"Path to .kdbx file (default: {get_keys_db_path()})",
     )
     list_p.add_argument(
         "--password", help="Master password (will prompt securely if omitted)"
@@ -336,7 +343,9 @@ def _add_key_parser(
     # key add
     add_p = key_sub.add_parser("add", help="Add a new API key.")
     add_p.add_argument(
-        "--db", default=str(get_keys_db_path()), help=f"Path to .kdbx file (default: {get_keys_db_path()})"
+        "--db",
+        default=str(get_keys_db_path()),
+        help=f"Path to .kdbx file (default: {get_keys_db_path()})",
     )
     add_p.add_argument(
         "--password", help="Master password (will prompt securely if omitted)"
@@ -349,7 +358,9 @@ def _add_key_parser(
     # key edit
     edit_p = key_sub.add_parser("edit", help="Edit an existing API key.")
     edit_p.add_argument(
-        "--db", default=str(get_keys_db_path()), help=f"Path to .kdbx file (default: {get_keys_db_path()})"
+        "--db",
+        default=str(get_keys_db_path()),
+        help=f"Path to .kdbx file (default: {get_keys_db_path()})",
     )
     edit_p.add_argument(
         "--password", help="Master password (will prompt securely if omitted)"
@@ -477,9 +488,7 @@ def _add_agent_parser(
     subparsers: argparse._SubParsersAction,
 ) -> argparse.ArgumentParser:
     """Add agent subcommand group: list, add, remove."""
-    parser = subparsers.add_parser(
-        "agent", help="Manage registered agent aliases."
-    )
+    parser = subparsers.add_parser("agent", help="Manage registered agent aliases.")
     agent_sub = parser.add_subparsers(dest="agent_command", required=True)
 
     # agent list
@@ -568,9 +577,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_key_parser(subparsers)
     _add_agent_parser(subparsers)
 
-    parser.epilog = "\n".join(
-        ["commands:", ""] + _format_commands(parser)
-    )
+    parser.epilog = "\n".join(["commands:", ""] + _format_commands(parser))
 
     args = parser.parse_args(argv)
 

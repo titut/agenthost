@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import subprocess
+import sys
 import uuid
 from contextlib import asynccontextmanager, closing
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
@@ -278,7 +281,72 @@ def build_app(agent: Agent, scheduler: AsyncIOScheduler | None = None) -> FastAP
     return app
 
 
-def serve(config: AgentConfig) -> None:
+def _parse_dotenv(path: str) -> dict[str, str]:
+    """Parse a simple .env file into a dict (no quoting/escaping support)."""
+    result: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key:
+                    result[key] = value
+    except OSError:
+        pass
+    return result
+
+
+def _start_discord_bridge(
+    env_path: str,
+    agent_host: str,
+    agent_port: int,
+) -> subprocess.Popen:
+    """Spawn the Discord bridge as a child process.
+
+    Loads the .env file at *env_path*, overrides AGENT_CHAT_URL to point at
+    the agent just started, and runs the bridge script.
+    """
+    import os as _os
+
+    env = dict(_os.environ)
+    env.update(_parse_dotenv(env_path))
+    env["AGENT_CHAT_URL"] = f"http://{agent_host}:{agent_port}/chat"
+
+    # Resolve the bridge script path relative to this file.
+    bridge_script = (
+        Path(__file__).resolve().parent.parent.parent
+        / "integrations"
+        / "discord"
+        / "main.py"
+    )
+
+    logger.info(
+        "Starting Discord bridge from %s (env=%s) -> %s",
+        bridge_script,
+        env_path,
+        env["AGENT_CHAT_URL"],
+    )
+
+    proc = subprocess.Popen(
+        [sys.executable, str(bridge_script)],
+        env=env,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+    )
+    logger.info("Discord bridge started (pid=%d)", proc.pid)
+    return proc
+
+
+def serve(
+    config: AgentConfig,
+    discord_env_path: str | None = None,
+) -> None:
     import uvicorn
 
     logger.info("Starting agent '%s' from %s", config.name, config.path)
@@ -338,16 +406,40 @@ def serve(config: AgentConfig) -> None:
         port,
         __import__("os").getpid(),
     )
+
+    # Start the Discord bridge before uvicorn.run blocks.
+    discord_proc = None
+    if discord_env_path:
+        try:
+            discord_proc = _start_discord_bridge(discord_env_path, config.host, port)
+        except Exception as exc:
+            logger.error("Failed to start Discord bridge: %s", exc)
+            print(f"Warning: Discord bridge failed to start: {exc}", file=sys.stderr)
+
     try:
         print(f"Serving agent '{config.name}' on http://{config.host}:{port}")
         print(f"Model: {config.model}")
         if config.base_url:
             print(f"Base URL: {config.base_url}")
         print("Tools: discovered at runtime from", config.tools_dir)
+        if discord_proc:
+            print(f"Discord bridge: pid={discord_proc.pid}")
         uvicorn.run(app, host=config.host, port=port, log_level="warning")
     except Exception as exc:
         logger.exception("Agent server '%s' crashed: %s", config.name, exc)
         raise
     finally:
         logger.info("Shutting down agent '%s'", config.name)
+        if discord_proc is not None and discord_proc.poll() is None:
+            logger.info("Terminating Discord bridge (pid=%d)", discord_proc.pid)
+            discord_proc.terminate()
+            try:
+                discord_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "Discord bridge did not exit in time, killing (pid=%d)",
+                    discord_proc.pid,
+                )
+                discord_proc.kill()
+                discord_proc.wait()
         unregister_agent()

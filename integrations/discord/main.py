@@ -98,22 +98,53 @@ def log(level: str, message: str, *args: Any) -> None:
 
 
 async def check_agent_health() -> dict[str, Any]:
-    """Verify the agent is reachable before starting the bot."""
-    log("info", f"Checking agent health at {AGENT_HEALTH_URL}")
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-        try:
-            response = await client.get(AGENT_HEALTH_URL)
-            response.raise_for_status()
-            data = response.json()
-            log("info", f"Agent healthy: {data.get('agent')} @ {data.get('model')}")
-            return data
-        except Exception as exc:
-            log("error", f"Agent health check failed: {exc}")
-            log(
-                "error",
-                f"Make sure the agent is running and reachable at {AGENT_CHAT_URL}",
-            )
-            raise
+    """Verify the agent is reachable before starting the bot.
+
+    Retries for up to AGENT_HEALTH_RETRY_MAX_ATTEMPTS with a backoff so the
+    bridge can be launched alongside the agent without racing its startup.
+    """
+    import os as _os
+
+    max_attempts = int(_os.environ.get("AGENT_HEALTH_RETRY_MAX_ATTEMPTS", "15"))
+    initial_delay = float(_os.environ.get("AGENT_HEALTH_RETRY_INITIAL_DELAY", "2.0"))
+    log(
+        "info",
+        f"Checking agent health at {AGENT_HEALTH_URL} "
+        f"(retries={max_attempts}, initial_delay={initial_delay}s)",
+    )
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            try:
+                response = await client.get(AGENT_HEALTH_URL)
+                response.raise_for_status()
+                data = response.json()
+                log(
+                    "info",
+                    f"Agent healthy after {attempt} attempt(s): "
+                    f"{data.get('agent')} @ {data.get('model')}",
+                )
+                return data
+            except Exception as exc:
+                last_exc = exc
+                if attempt < max_attempts:
+                    wait = initial_delay * (1.5 ** (attempt - 1))
+                    log(
+                        "info",
+                        f"Health check attempt {attempt}/{max_attempts} failed: {exc}. "
+                        f"Waiting {wait:.1f}s...",
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    log(
+                        "error",
+                        f"Agent health check failed after {max_attempts} attempts: {exc}",
+                    )
+    log(
+        "error",
+        f"Make sure the agent is running and reachable at {AGENT_CHAT_URL}",
+    )
+    raise last_exc or RuntimeError("Agent health check failed after retries")
 
 
 def _run_agenthost_list() -> list[dict[str, object]]:
