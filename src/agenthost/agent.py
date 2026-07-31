@@ -84,17 +84,68 @@ class Agent:
         # Buffer the entire assistant response for orchestrator agents so we can
         # apply a post-processing sanitizer before streaming it to clients.
         self._buffer_content = config.orchestrator
+        # Threads in planning mode (activated by /plan prefix).  Planning-mode
+        # threads see only built-in tools (no toolbox tools) plus the planning
+        # tool itself.  Normal threads see full toolbox tools and no plan tool.
+        self._planning_threads: set[str] = set()
+        # Pre-built schemas + runner for planning mode — only built-in tools.
+        planning_fns: dict[str, Any] = {
+            "get_current_datetime": self.builtin_functions["get_current_datetime"],
+            "get_skill": self.builtin_functions["get_skill"],
+        }
+        if "plan" in self.builtin_functions:
+            planning_fns["plan"] = self.builtin_functions["plan"]
+        from agenthost.tools import InProcessToolRunner, _build_tool_schema
+
+        self._planning_tool_schemas = [
+            _build_tool_schema(fn) for fn in planning_fns.values()
+        ]
+        self._planning_tool_runner = InProcessToolRunner(planning_fns, config=config)
+
+    def enter_planning_mode(self, thread_id: str) -> None:
+        """Restrict *thread_id* to built-in tools only (plus the plan tool).
+
+        Called when the user sends a ``/plan`` prefixed message.
+        """
+        self._planning_threads.add(thread_id)
+        # Replace the thread's state with planning-mode schemas so the next
+        # LLM call sees only built-in tools.
+        self.thread_states[thread_id] = ThreadState(
+            tool_schemas=self._planning_tool_schemas,
+            tool_runner=self._planning_tool_runner,
+        )
+        logger.info("Thread '%s' entered planning mode", thread_id)
+
+    def exit_planning_mode(self, thread_id: str) -> None:
+        """Restore full toolbox tools for *thread_id*.
+
+        Called when the user sends a ``/noplan`` prefixed message.
+        """
+        self._planning_threads.discard(thread_id)
+        # Restore default tools and skills.
+        self.thread_states[thread_id] = ThreadState(
+            tool_schemas=self.default_tool_schemas,
+            tool_runner=self.default_tool_runner,
+        )
+        logger.info("Thread '%s' exited planning mode", thread_id)
 
     def _get_thread_state(self, thread_id: str) -> ThreadState:
         """Return the toolbox state for *thread_id*, creating it if needed.
 
         A new state starts with the agent's default tools and no active toolbox.
+        If the thread is in planning mode, only built-in tools are exposed.
         """
         if thread_id not in self.thread_states:
-            self.thread_states[thread_id] = ThreadState(
-                tool_schemas=self.default_tool_schemas,
-                tool_runner=self.default_tool_runner,
-            )
+            if thread_id in self._planning_threads:
+                self.thread_states[thread_id] = ThreadState(
+                    tool_schemas=self._planning_tool_schemas,
+                    tool_runner=self._planning_tool_runner,
+                )
+            else:
+                self.thread_states[thread_id] = ThreadState(
+                    tool_schemas=self.default_tool_schemas,
+                    tool_runner=self.default_tool_runner,
+                )
         return self.thread_states[thread_id]
 
     def _system_prompt_initial(self, thread_id: str) -> str:

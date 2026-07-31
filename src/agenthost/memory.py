@@ -82,6 +82,51 @@ class AgentMemory:
                     value TEXT NOT NULL,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS task_plans (
+                    id TEXT PRIMARY KEY,
+                    thread_id TEXT NOT NULL,
+                    goal TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    completed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_task_plans_thread
+                    ON task_plans(thread_id);
+                CREATE INDEX IF NOT EXISTS idx_task_plans_status
+                    ON task_plans(status);
+
+                CREATE TABLE IF NOT EXISTS task_steps (
+                    id TEXT PRIMARY KEY,
+                    plan_id TEXT NOT NULL REFERENCES task_plans(id) ON DELETE CASCADE,
+                    step_number INTEGER NOT NULL,
+                    description TEXT NOT NULL,
+                    assigned_toolbox TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    result_summary TEXT,
+                    result_artifact_id TEXT,
+                    result_is_truncated INTEGER DEFAULT 0,
+                    timeout_seconds INTEGER DEFAULT 600,
+                    max_retries INTEGER DEFAULT 3,
+                    retry_count INTEGER DEFAULT 0,
+                    retry_strategy TEXT DEFAULT 'retry',
+                    fallback_step_id TEXT REFERENCES task_steps(id),
+                    error_message TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    started_at TEXT,
+                    completed_at TEXT,
+                    UNIQUE(plan_id, step_number)
+                );
+                CREATE INDEX IF NOT EXISTS idx_task_steps_plan
+                    ON task_steps(plan_id);
+
+                CREATE TABLE IF NOT EXISTS task_step_dependencies (
+                    step_id TEXT NOT NULL REFERENCES task_steps(id) ON DELETE CASCADE,
+                    depends_on_step_id TEXT NOT NULL REFERENCES task_steps(id) ON DELETE CASCADE,
+                    PRIMARY KEY (step_id, depends_on_step_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_task_step_deps_depends
+                    ON task_step_dependencies(depends_on_step_id);
                 """)
             conn.commit()
 

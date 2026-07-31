@@ -148,6 +148,37 @@ def build_app(agent: Agent, scheduler: AsyncIOScheduler | None = None) -> FastAP
             "Chat request for agent '%s' thread '%s'", agent.config.name, thread_id
         )
 
+        # Detect /plan and /noplan anywhere in the message to toggle
+        # planning mode.  The prefix can appear at the start or mid-message;
+        # everything before it is dropped, everything after is the prompt.
+        original_message = request.message
+
+        def _find_directive(msg: str, directive: str) -> int | None:
+            """Return the start index of *directive* in *msg* if it appears
+            as a word boundary (start-of-string or preceded by whitespace),
+            otherwise None."""
+            idx = msg.find(directive)
+            while idx != -1:
+                if idx == 0 or msg[idx - 1].isspace():
+                    return idx
+                idx = msg.find(directive, idx + 1)
+            return None
+
+        plan_idx = _find_directive(original_message, "/plan")
+        noplan_idx = _find_directive(original_message, "/noplan")
+
+        # /noplan takes precedence — it reverts to normal mode.
+        if noplan_idx is not None:
+            agent.exit_planning_mode(thread_id)
+            after = original_message[noplan_idx + len("/noplan") :]
+            request.message = after.strip()
+            logger.info("Thread '%s' exited planning mode via /noplan", thread_id)
+        elif plan_idx is not None:
+            agent.enter_planning_mode(thread_id)
+            after = original_message[plan_idx + len("/plan") :]
+            request.message = after.strip()
+            logger.info("Thread '%s' entered planning mode via /plan", thread_id)
+
         async def event_stream() -> AsyncIterator[str]:
             # First event gives the thread_id so the client can continue the conversation.
             meta_event = f'event: meta\ndata: {{"thread_id": "{thread_id}"}}\n\n'

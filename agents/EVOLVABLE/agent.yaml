@@ -1,9 +1,0 @@
-name: EVOLVABLE
-model: deepseek-ai/DeepSeek-V4-Flash
-temperature: 0.4
-port: 8700
-toolboxes_dir: /home/koroko/Workspace/agenthost/toolboxes-evolve
-
-extra:
-  builtin_tools: [toolbox]
-  discord_bridge_url: http://127.0.0.1:9005/send

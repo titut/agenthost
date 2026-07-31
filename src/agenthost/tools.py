@@ -1,4 +1,5 @@
 """Tool discovery and execution."""
+
 from __future__ import annotations
 
 import asyncio
@@ -23,8 +24,8 @@ current_thread_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 )
 
 # Exposed so agent tools can read agent configuration (e.g. for summarization).
-current_agent_config: contextvars.ContextVar["AgentConfig | None"] = contextvars.ContextVar(
-    "agenthost_current_agent_config", default=None
+current_agent_config: contextvars.ContextVar["AgentConfig | None"] = (
+    contextvars.ContextVar("agenthost_current_agent_config", default=None)
 )
 
 
@@ -34,8 +35,7 @@ class ToolRunner(ABC):
     @abstractmethod
     async def run(
         self, tool_name: str, arguments: dict[str, Any], thread_id: str | None = None
-    ) -> str:
-        ...
+    ) -> str: ...
 
 
 class InProcessToolRunner(ToolRunner):
@@ -88,7 +88,11 @@ class InProcessToolRunner(ToolRunner):
                 return json.dumps({"error": f"{type(exc).__name__}: {exc}"})
         finally:
             for token in reversed(tokens):
-                current_agent_config.reset(token) if token.var is current_agent_config else current_thread_id.reset(token)
+                (
+                    current_agent_config.reset(token)
+                    if token.var is current_agent_config
+                    else current_thread_id.reset(token)
+                )
 
 
 def _resolve_type_hints(fn: Callable[..., Any]) -> dict[str, Any]:
@@ -146,7 +150,9 @@ def _build_tool_schema(fn: Callable[..., Any]) -> dict[str, Any]:
     }
 
 
-def _missing_required_args(fn: Callable[..., Any], arguments: dict[str, Any]) -> list[str]:
+def _missing_required_args(
+    fn: Callable[..., Any], arguments: dict[str, Any]
+) -> list[str]:
     """Return the names of required parameters that are missing from arguments."""
     sig = inspect.signature(fn)
     missing: list[str] = []
@@ -171,9 +177,7 @@ def _normalize_text(text: str) -> str:
     # Strip invisible/formatting characters that models use to evade penalties:
     # soft hyphen, CGJ, zero-width spaces/joiners, bidi marks, variation
     # selectors, and the BOM.
-    invisible = re.compile(
-        "[\xad\u034f\u200b-\u200f\u202a-\u202e\ufe00-\ufe0f\ufeff]"
-    )
+    invisible = re.compile("[\xad\u034f\u200b-\u200f\u202a-\u202e\ufe00-\ufe0f\ufeff]")
     return invisible.sub("", normalized)
 
 
@@ -183,15 +187,16 @@ def _normalize_argument_strings(obj: Any) -> Any:
         return _normalize_text(obj)
     if isinstance(obj, dict):
         return {
-            _normalize_text(k): _normalize_argument_strings(v)
-            for k, v in obj.items()
+            _normalize_text(k): _normalize_argument_strings(v) for k, v in obj.items()
         }
     if isinstance(obj, list):
         return [_normalize_argument_strings(v) for v in obj]
     return obj
 
 
-def _coerce_arguments(fn: Callable[..., Any], arguments: dict[str, Any]) -> dict[str, Any]:
+def _coerce_arguments(
+    fn: Callable[..., Any], arguments: dict[str, Any]
+) -> dict[str, Any]:
     """Coerce string arguments from the LLM into the function's annotated types."""
     arguments = _normalize_argument_strings(arguments)
     hints = _resolve_type_hints(fn)
@@ -202,6 +207,19 @@ def _coerce_arguments(fn: Callable[..., Any], arguments: dict[str, Any]) -> dict
         if target is None or not isinstance(value, str):
             coerced[name] = value
             continue
+
+        # Resolve union types (e.g. list[...] | None) to the first concrete
+        # type so we still coerce the string value.  Without this, the LLM
+        # sends a JSON string for `steps` but the union annotation prevents
+        # the list/dict coercion below from triggering.
+        import types
+
+        origin_args = getattr(target, "__args__", None)
+        if origin_args is not None:
+            for arg in origin_args:
+                if arg is not type(None):
+                    target = arg
+                    break
 
         origin = getattr(target, "__origin__", None)
 

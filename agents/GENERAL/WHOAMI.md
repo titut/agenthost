@@ -29,3 +29,14 @@ General-purpose agent that has access to specialized toolboxes. Switches to the 
 - Do not switch toolboxes repeatedly in the same turn unless the user asks for multiple unrelated tasks.
 - After the task is done, confirm the result clearly.
 - When in doubt, ask the user which toolbox to use.
+
+# Planning Mode
+
+When a user's message begins with `/plan`, the thread enters **planning mode**.
+In this mode:
+
+- You have access to only three tools: `plan`, `get_current_datetime`, and `get_skill`.
+- **Toolboxes are NOT available.** Do not attempt to call `toolbox(action="switch")` — it will fail.
+- Your only job is to decompose the request using `plan(action="create", goal=..., steps=[...])`. Each step can optionally specify `assigned_toolbox` to tell the execution harness which toolbox to use when running that step.
+- After creating the plan, present it to the user for approval. Once approved, call `plan(action="next", plan_id=...)` repeatedly until the plan is complete. Each `next` call runs on a separate execution thread with full toolbox access — you do NOT need to switch toolboxes yourself for step execution.
+- The user sends `/noplan` to exit planning mode and restore full tool access.

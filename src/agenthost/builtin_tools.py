@@ -737,6 +737,546 @@ class DiscordTools:
                 logger.warning("Failed to record Discord message in memory: %s", exc)
 
 
+class PlanningTools:
+    """Unified tool for creating, reading, and stepping through task plans.
+
+    The agent drives execution by repeatedly calling ``plan(action="next")``.
+    Each call executes one step via a focused ``agent.chat()`` call and returns
+    the assistant's response.  The agent sees the output and calls ``next``
+    again for the following step — like a cursor walking through the plan.
+
+    Provides a single ``plan(action, ...)`` entry point so the LLM sees
+    exactly one planning tool in the schema.
+    """
+
+    def __init__(
+        self,
+        config: AgentConfig,
+        agent_provider: Callable[[], "Agent"] | None = None,
+    ):
+        self.config = config
+        self._agent_provider = agent_provider
+        self._store: Any = None
+
+    def _get_store(self) -> Any:
+        if self._store is None:
+            from agenthost.planning import TaskStateStore
+
+            agent = self._agent_provider() if self._agent_provider else None
+            db_path = (
+                agent.memory.db_path
+                if agent is not None
+                else self.config.memory_dir / "memory.db"
+            )
+            self._store = TaskStateStore(db_path)
+        return self._store
+
+    def _get_agent(self) -> "Agent | None":
+        return self._agent_provider() if self._agent_provider else None
+
+    # ------------------------------------------------------------------
+    # Unified tool entry-point
+    # ------------------------------------------------------------------
+
+    async def plan(
+        self,
+        action: str,
+        goal: str | None = None,
+        steps: list[dict[str, Any]] | None = None,
+        plan_id: str | None = None,
+    ) -> str:
+        """Create, read, and step through multi-step task execution plans.
+
+        Call ``action="create"`` to decompose a complex request into steps.
+        Call ``action="next"`` to execute the next pending step — the tool
+        runs a focused ``agent.chat()`` call and returns the response.
+        Call ``action="read"`` to inspect the plan's current state.
+        Call ``action="skip"`` to skip a failed step.
+
+        Args:
+            action: One of "create", "next", "read", "skip".
+            goal: High-level goal description. Required for "create".
+            steps: List of step dicts. Required for "create".  Each dict has:
+                step_number (int), description (str), depends_on (list[int],
+                optional), assigned_toolbox (str, optional).
+            plan_id: Plan identifier. Required for "next", "read", "skip".
+                Optional for "read" (defaults to active thread plan).
+        """
+        action = action.lower().strip()
+
+        if action == "create":
+            return self._action_create(goal, steps)
+        if action == "next":
+            return await self._action_next(plan_id)
+        if action == "read":
+            return self._action_read(plan_id)
+        if action == "skip":
+            return self._action_skip(plan_id)
+        if action == "delete":
+            return self._action_delete(plan_id)
+        if action == "reset":
+            return self._action_reset(plan_id)
+        if action == "list":
+            return self._action_list()
+
+        return json.dumps(
+            {
+                "error": (
+                    f"Unknown action '{action}'. "
+                    "Valid actions: create, next, read, skip, delete, reset, list."
+                )
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # Action implementations
+    # ------------------------------------------------------------------
+
+    def _action_create(
+        self,
+        goal: str | None,
+        steps: list[dict[str, Any]] | None,
+    ) -> str:
+        if not goal:
+            return json.dumps({"error": "goal is required for action='create'."})
+        if not steps:
+            return json.dumps({"error": "steps is required for action='create'."})
+
+        from agenthost.planning import TaskPlan, TaskStep, _validate_dag
+
+        err = _validate_dag(steps)
+        if err is not None:
+            return json.dumps({"error": err})
+
+        step_number_to_id: dict[int, str] = {}
+        task_steps: list[TaskStep] = []
+        for s in steps:
+            step_num = int(s["step_number"])
+            deps = s.get("depends_on") or []
+            dep_ids: list[str] = []
+            missing: list[int] = []
+            for dn in deps:
+                sid = step_number_to_id.get(dn)
+                if sid is not None:
+                    dep_ids.append(sid)
+                else:
+                    missing.append(dn)
+            if missing:
+                return json.dumps(
+                    {
+                        "error": (
+                            f"Step {step_num} depends on step(s) {missing} "
+                            f"which have not been defined in the steps list."
+                        )
+                    }
+                )
+            step = TaskStep(
+                step_number=step_num,
+                description=s["description"],
+                assigned_toolbox=s.get("assigned_toolbox"),
+                depends_on=dep_ids,
+            )
+            step_number_to_id[step_num] = step.id
+            task_steps.append(step)
+
+        agent = self._get_agent()
+        if agent is None:
+            return json.dumps({"error": "Agent not available"})
+        thread_id: str = getattr(agent, "_current_thread_id", "")
+
+        plan = TaskPlan(thread_id=thread_id, goal=goal, steps=task_steps)
+        try:
+            self._get_store().create_plan(plan)
+        except ValueError as exc:
+            return json.dumps({"error": str(exc)})
+
+        # Plan is created as draft. Agent presents it; user approves textually.
+        step_lines = [
+            f"{s.step_number}. {s.description}"
+            + (f" (→ {s.assigned_toolbox})" if s.assigned_toolbox else "")
+            for s in task_steps
+        ]
+        formatted = (
+            f"📋 **Plan: {goal}**\n\n"
+            + "\n".join(step_lines)
+            + (
+                "\n\nDependencies: "
+                + ", ".join(
+                    f"Step {s.step_number} depends on step(s) "
+                    + ", ".join(
+                        str(cs.step_number)
+                        for cs in task_steps
+                        if cs.id in s.depends_on
+                    )
+                    for s in task_steps
+                    if s.depends_on
+                )
+                if any(s.depends_on for s in task_steps)
+                else ""
+            )
+        )
+
+        return json.dumps(
+            {
+                "status": "draft",
+                "plan_id": plan.id,
+                "step_count": len(task_steps),
+                "formatted_plan": formatted,
+            },
+            indent=2,
+        )
+
+    async def _action_next(self, plan_id: str | None) -> str:
+        """Execute the next pending step.  Returns the assistant's response.
+
+        If the previous step failed, calling ``next`` again retries it.
+        If all steps are completed, returns a completion message.
+        """
+        if not plan_id:
+            return json.dumps({"error": "plan_id is required for action='next'."})
+
+        agent = self._get_agent()
+        if agent is None:
+            return json.dumps({"error": "Agent not available"})
+
+        store = self._get_store()
+        plan = store.get_plan(plan_id)
+        if plan is None:
+            return json.dumps({"error": f"Plan '{plan_id}' not found."})
+
+        # All done?
+        all_done = all(s.status in ("completed", "skipped") for s in plan.steps)
+        if all_done:
+            return json.dumps(
+                {
+                    "status": "completed",
+                    "plan_id": plan_id,
+                    "message": "All steps are finished.",
+                }
+            )
+
+        # Find the next ready/pending step in DAG order.
+        completed_ids = {s.id for s in plan.steps if s.status == "completed"}
+        next_step: Any = None
+        for s in plan.steps:
+            if s.status == "running":
+                # Step was left mid-execution (unlikely with the new model).
+                # Treat it as pending and re-run.
+                next_step = s
+                break
+            if s.status in ("failed", "pending"):
+                # Check if its dependencies are satisfied.
+                if not s.depends_on or all(d in completed_ids for d in s.depends_on):
+                    next_step = s
+                    break
+                # Otherwise show what's blocking it.
+                missing = [d for d in s.depends_on if d not in completed_ids]
+                missing_nums = [
+                    str(cs.step_number) for cs in plan.steps if cs.id in missing
+                ]
+                return json.dumps(
+                    {
+                        "status": "blocked",
+                        "step_number": s.step_number,
+                        "step_description": s.description,
+                        "waiting_on": missing_nums,
+                        "hint": (
+                            f"Step {s.step_number} cannot run yet. "
+                            f"Steps {missing_nums} must complete first."
+                        ),
+                    }
+                )
+
+        if next_step is None:
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": "No runnable step found in the plan.",
+                }
+            )
+
+        # Mark as running.
+        store.update_step_status(next_step.id, "running")
+
+        # Switch toolbox if needed.
+        if next_step.assigned_toolbox:
+            agent.switch_toolbox(next_step.assigned_toolbox)
+
+        # Build the full context prompt and execute via agent.chat().
+        prompt = self._build_step_prompt(plan, next_step)
+        result_text, error = await self._call_agent(agent, plan, next_step, prompt)
+
+        if error is not None:
+            # Step failed — mark it and return the error.
+            store.update_step_status(next_step.id, "failed", error_message=error)
+            return json.dumps(
+                {
+                    "status": "failed",
+                    "plan_id": plan_id,
+                    "step_number": next_step.step_number,
+                    "step_description": next_step.description,
+                    "error": error,
+                    "hint": (
+                        "Call plan(action='next', plan_id=...) to retry this step, "
+                        "or plan(action='skip', plan_id=...) to skip it."
+                    ),
+                }
+            )
+
+        # Step completed — store the result.
+        store.update_step_status(next_step.id, "completed", result_summary=result_text)
+
+        # Return the step result to the calling LLM.
+        done = all(s.status in ("completed", "skipped") for s in plan.steps)
+        return json.dumps(
+            {
+                "status": "step_completed",
+                "plan_id": plan_id,
+                "step_number": next_step.step_number,
+                "step_description": next_step.description,
+                "result": result_text,
+                "plan_finished": done,
+                "hint": (
+                    "Call plan(action='next', plan_id=...) for the next step."
+                    if not done
+                    else "Plan is complete."
+                ),
+            }
+        )
+
+    def _action_read(self, plan_id: str | None) -> str:
+        agent = self._get_agent()
+        store = self._get_store()
+
+        if plan_id is not None:
+            plan = store.get_plan(plan_id)
+            if plan is None:
+                return json.dumps({"error": f"Plan '{plan_id}' not found."})
+        else:
+            if agent is None:
+                return json.dumps(
+                    {"error": "Agent not available and no plan_id provided."}
+                )
+            thread_id: str = getattr(agent, "_current_thread_id", "")
+            plan = store.get_active_plan_for_thread(thread_id)
+            if plan is None:
+                return json.dumps({"active_plan": None})
+
+        steps_out = [
+            {
+                "step_number": s.step_number,
+                "description": s.description,
+                "status": s.status,
+                "result_preview": (
+                    (s.result_summary or "")[:300] if s.result_summary else None
+                ),
+                "error_message": s.error_message,
+            }
+            for s in plan.steps
+        ]
+        return json.dumps(
+            {
+                "plan_id": plan.id,
+                "goal": plan.goal,
+                "status": plan.status,
+                "steps": steps_out,
+            },
+            indent=2,
+        )
+
+    def _action_skip(self, plan_id: str | None) -> str:
+        """Skip the currently failed step.  The next ``next`` call picks up
+        the following step."""
+        if not plan_id:
+            return json.dumps({"error": "plan_id is required for action='skip'."})
+
+        store = self._get_store()
+        plan = store.get_plan(plan_id)
+        if plan is None:
+            return json.dumps({"error": f"Plan '{plan_id}' not found."})
+
+        # Find the first failed step and skip it.
+        skipped = None
+        for s in plan.steps:
+            if s.status == "failed":
+                store.update_step_status(s.id, "skipped")
+                skipped = s
+                break
+
+        if skipped is None:
+            return json.dumps(
+                {"error": "No failed step to skip. Call plan(action='next')."}
+            )
+
+        # Unblock dependents that can now proceed.
+        plan = store.get_plan(plan_id)
+        if plan is not None:
+            for s in plan.steps:
+                if s.status == "blocked":
+                    completed_or_skipped = {
+                        cs.id
+                        for cs in plan.steps
+                        if cs.status in ("completed", "skipped")
+                    }
+                    if all(d in completed_or_skipped for d in s.depends_on):
+                        store.update_step_status(s.id, "pending")
+
+        return json.dumps(
+            {
+                "status": "skipped",
+                "plan_id": plan_id,
+                "step_number": skipped.step_number,
+                "hint": "Call plan(action='next', plan_id=...) to continue.",
+            }
+        )
+
+    def _action_delete(self, plan_id: str | None) -> str:
+        """Delete a plan and all its steps permanently."""
+        if not plan_id:
+            return json.dumps({"error": "plan_id is required for action='delete'."})
+
+        store = self._get_store()
+        plan = store.get_plan(plan_id)
+        if plan is None:
+            return json.dumps({"error": f"Plan '{plan_id}' not found."})
+
+        store.delete_plan(plan_id)
+        return json.dumps(
+            {
+                "status": "deleted",
+                "plan_id": plan_id,
+                "message": f"Plan '{plan_id}' permanently deleted.",
+            }
+        )
+
+    def _action_reset(self, plan_id: str | None) -> str:
+        """Reset all steps in a plan back to pending so the user can re-run it.
+        Clears all step results, error messages, and completion timestamps."""
+        if not plan_id:
+            return json.dumps({"error": "plan_id is required for action='reset'."})
+
+        store = self._get_store()
+        plan = store.get_plan(plan_id)
+        if plan is None:
+            return json.dumps({"error": f"Plan '{plan_id}' not found."})
+
+        for s in plan.steps:
+            store.update_step_status(
+                s.id, "pending", result_summary=None, error_message=None
+            )
+
+        return json.dumps(
+            {
+                "status": "reset",
+                "plan_id": plan_id,
+                "step_count": plan.step_count,
+                "hint": "Call plan(action='next', plan_id=...) to re-run the plan.",
+            }
+        )
+
+    def _action_list(self) -> str:
+        """List all plans for the current thread."""
+        agent = self._get_agent()
+        if agent is None:
+            return json.dumps({"error": "Agent not available"})
+        thread_id: str = getattr(agent, "_current_thread_id", "")
+
+        store = self._get_store()
+        import sqlite3
+
+        plans_data: list[dict[str, Any]] = []
+        with store._connect() as conn:
+            rows = conn.execute(
+                """SELECT p.id, p.goal, p.status, p.created_at, p.completed_at,
+                   COUNT(s.id) as step_count
+                   FROM task_plans p
+                   LEFT JOIN task_steps s ON s.plan_id = p.id
+                   WHERE p.thread_id = ?
+                   GROUP BY p.id
+                   ORDER BY p.created_at DESC""",
+                (thread_id,),
+            ).fetchall()
+            for row in rows:
+                plans_data.append(
+                    {
+                        "plan_id": row["id"],
+                        "goal": row["goal"],
+                        "status": row["status"],
+                        "step_count": row["step_count"],
+                        "created_at": row["created_at"],
+                        "completed_at": row["completed_at"],
+                    }
+                )
+
+        return json.dumps({"thread_id": thread_id, "plans": plans_data}, indent=2)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_step_prompt(plan: Any, step: Any) -> str:
+        """Construct a focused prompt for *step*, including prior step outputs."""
+        total = len(plan.steps)
+        parts: list[str] = []
+
+        parts.append(
+            f"[Plan Progress: Step {step.step_number} of {total}"
+            f" — {step.description}]"
+        )
+        parts.append("")
+        parts.append(f"Overall goal: {plan.goal}")
+        parts.append("")
+
+        # Inject outputs from completed steps.
+        completed = [
+            s for s in plan.steps if s.status == "completed" and s.id in step.depends_on
+        ]
+        if completed:
+            parts.append("Completed work so far:")
+            for cs in completed:
+                preview = (cs.result_summary or "(no output)")[:500]
+                parts.append(f"  Step {cs.step_number} ({cs.description}): {preview}")
+            parts.append("")
+
+        parts.append(f"Your task now: {step.description}")
+        parts.append("")
+        parts.append(
+            "Focus only on this step.  Produce a complete, synthesized output."
+        )
+
+        return "\n".join(parts)
+
+    async def _call_agent(
+        self,
+        agent: "Agent",
+        plan: Any,
+        step: Any,
+        prompt: str,
+    ) -> tuple[str | None, str | None]:
+        """Call ``agent.chat()`` on the plan's thread and capture the response.
+
+        Returns ``(result_text, error_string)``.  Exactly one will be non-None.
+        """
+        plan_thread = plan.id  # plan_id doubles as the dedicated thread_id
+
+        try:
+            result_parts: list[str] = []
+            async for chunk in agent.chat(plan_thread, prompt):
+                try:
+                    event = json.loads(chunk)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "content":
+                    result_parts.append(event.get("data", ""))
+            result_text = "".join(result_parts).strip()
+            if not result_text:
+                return None, "The agent returned an empty response."
+            return result_text, None
+        except Exception as exc:  # noqa: BLE001
+            return None, f"{type(exc).__name__}: {exc}"
+
+
 def build_builtin_tools_prompt(config: AgentConfig) -> str:
     """Return a markdown description of enabled built-in tools for the system prompt."""
     enabled = config.extra.get("builtin_tools") or []
@@ -806,6 +1346,18 @@ def build_builtin_tools_prompt(config: AgentConfig) -> str:
             "content is required for create and update and must include a '# Description' section. "
             "Use this when the user asks to add, change, or remove one of the agent's skills."
         )
+    if "planning" in enabled or "plan" in enabled:
+        descriptions.append(
+            "- `plan(action, goal, steps, plan_id)`: "
+            "Manage multi-step task execution plans. "
+            "Actions: create (build from goal+steps), next (execute next step), "
+            "read (inspect plan), skip (skip failed step), "
+            "delete (permanently remove plan), reset (clear results for re-run), "
+            "list (list all plans in current thread). "
+            "After creating a plan, call plan(action='next', plan_id=...) "
+            "repeatedly until the plan returns plan_finished=true or 'status':'completed'. "
+            "Call plan(action='list') to see all plans with their IDs."
+        )
 
     if not descriptions:
         return ""
@@ -840,6 +1392,7 @@ def make_builtin_tools(
     thread_tools = ThreadTools(agent_provider)
     filesystem_tools = FileSystemTools()
     toolbox_tools = ToolboxTools(config, agent_provider)
+    planning_tools = PlanningTools(config, agent_provider)
     available = {
         "event_tool": event_tools.event_tool,
         "get_current_datetime": datetime_tools.get_current_datetime,
@@ -851,14 +1404,17 @@ def make_builtin_tools(
         "read_file": filesystem_tools.read_file,
         "list_uploads": filesystem_tools.list_uploads,
         "toolbox": toolbox_tools.toolbox,
+        "plan": planning_tools.plan,
     }
 
-    # get_current_datetime and get_skill are enabled by default for every
-    # agent. Toolbox management is opt-in via the "toolbox" group or the
-    # individual tool name in extra.builtin_tools.
+    # get_current_datetime, get_skill, and plan are always available.
+    # Planning-mode threads only see these three tools (no toolbox tools).
+    # Normal-mode threads see plan + all toolbox tools.
+    # Toolbox management is opt-in via extra.builtin_tools.
     functions: dict[str, Callable[..., Any]] = {
         "get_current_datetime": available["get_current_datetime"],
         "get_skill": available["get_skill"],
+        "plan": available["plan"],
     }
 
     for item in enabled:
@@ -876,6 +1432,8 @@ def make_builtin_tools(
             functions["list_uploads"] = available["list_uploads"]
         elif item == "toolbox":
             functions["toolbox"] = available["toolbox"]
+        elif item == "planning":
+            functions["plan"] = available["plan"]
         elif item in available:
             functions[item] = available[item]
         else:
