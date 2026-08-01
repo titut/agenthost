@@ -761,11 +761,12 @@ class Agent:
                 query_parts.append(f"{_role_prefix(msg.get('role'))} {content}")
         query_text = "\n".join(query_parts)
 
-        # Retrieve relevant chunks from the full history. Tool interactions
-        # (stored in the DB but excluded from the recent window) are included
-        # in the candidate pool. Messages already in the recent window are
-        # excluded via exclude_message_ids so we don't duplicate context.
-        if normalized_history and query_text:
+        # Retrieve relevant chunks from the full history when RAG mode is
+        # enabled (the default).  Tool interactions (stored in the DB but
+        # excluded from the recent window) are included in the candidate pool.
+        # Messages already in the recent window are excluded via
+        # exclude_message_ids so we do not duplicate context.
+        if cfg.mode == "rag" and normalized_history and query_text:
             recent_ids = {msg.get("id") for msg in recent_history if msg.get("id")}
             rag_chunks = await self.memory.retrieve_relevant_chunks(
                 thread_id,
