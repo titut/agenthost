@@ -5,4 +5,4 @@ port: 8500
 toolboxes_dir: /home/koroko/Workspace/agenthost/toolboxes
 
 extra:
-  builtin_tools: [toolbox]
+  builtin_tools: [toolbox, send_discord, events]

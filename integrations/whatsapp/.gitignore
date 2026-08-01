@@ -1,5 +1,0 @@
-node_modules/
-dist/
-auth_state/
-.env
-*.log

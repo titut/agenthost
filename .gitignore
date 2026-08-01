@@ -15,6 +15,7 @@ build/
 *venv
 env/
 .env/
+.env_*
 
 # ── Auto-generated agent memory (created at runtime) ─────────────────
 agents/*/memory/
@@ -82,8 +83,7 @@ uploads/
 # --- ignored agents ---
 entries/
 agents_personal
-agents/BEVABAN_GENERAL
-agents/AKAT_GENERAL
+agents/BEVABAN
 
 # --- ignored toolboxes ---
 toolboxes_*
