@@ -503,3 +503,46 @@ def calculate(expression: str) -> dict:
         return {"expression": expression, "result": _eval(tree)}
     except Exception as exc:
         return {"error": str(exc)}
+
+
+async def forge_league_of_legends(input_prompt: str) -> dict[str, Any]:
+    """Get information on League of Legends games from a local forge workflow.
+
+    Runs the command `forge run <HOME>/Workspace/automation-forge/examples/esports_matches
+    <input_prompt>` and returns the workflow's text output, which contains the answer.
+
+    Args:
+        input_prompt: The question or prompt to send to the esports_matches workflow.
+
+    Returns:
+        A dict with key "output" containing the workflow stdout on success, or an
+        "error" key (and optionally "stderr") on failure.
+    """
+    home = os.environ.get("HOME_DIR") or os.environ.get("HOME") or str(Path.home())
+    target = os.path.join(
+        home, "Workspace", "automation-forge", "examples", "esports_matches"
+    )
+    cmd = ["forge", "run", target, input_prompt]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+    except FileNotFoundError as exc:
+        return {"error": f"forge executable not found: {exc}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"Failed to run forge: {type(exc).__name__}: {exc}"}
+
+    output = stdout.decode("utf-8", errors="replace").strip()
+    if proc.returncode != 0:
+        error_text = stderr.decode("utf-8", errors="replace").strip()
+        return {
+            "error": f"forge exited with code {proc.returncode}",
+            "stderr": error_text,
+            "stdout": output,
+        }
+
+    return {"output": output}
